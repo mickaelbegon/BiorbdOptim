@@ -1,8 +1,8 @@
 """
-This example is inspired from the giant circle gymnastics skill. It is composed of two pendulums
+This example is inspired from the clear pike circle gymnastics skill. It is composed of two pendulums
 representing the trunk and legs segments (only the hip flexion is actuated). The objective is to minimize the
-maximum torque (minmax) of the hip flexion while performing the giant circle. The maximum torque is included to the
-problem as a parameter, all torque interval re constrained to be smaller than this parameter, this parameter is the
+extreme torque (minmax) of the hip flexion while performing the clear pike circle motion. The extreme torques are included to the
+problem as parameters, all torque intervals are constrained to be smaller than this parameter, these parameters are
 minimized.
 """
 
@@ -15,6 +15,7 @@ from bioptim import (
     DynamicsFcn,
     ObjectiveList,
     ConstraintList,
+    ConstraintFcn,
     BoundsList,
     InitialGuessList,
     Node,
@@ -43,15 +44,21 @@ def my_parameter_function(bio_model: biorbd.Model, value: MX):
 def prepare_ocp(
     bio_model_path: str = "models/double_pendulum.bioMod",
 ) -> OptimalControlProgram:
-    bio_model = BiorbdModel(bio_model_path)
+    bio_model = (BiorbdModel(bio_model_path), BiorbdModel(bio_model_path))
 
     # Problem parameters
-    n_shooting = 40
-    final_time = 1
-    tau_min, tau_max, tau_init = -10, 10, 0
+    n_shooting = (30, 30)
+    final_time = (2, 3)
+    tau_min, tau_max, tau_init = -40, 40, 0
+
+    # Dynamics
+    dynamics = DynamicsList()
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
+    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
 
     # Mapping
     tau_mappings = BiMappingList()
+    tau_mappings.add("tau", to_second=[None, 0], to_first=[1])
     tau_mappings.add("tau", to_second=[None, 0], to_first=[1])
 
     # Define the parameter to optimize
@@ -83,49 +90,41 @@ def prepare_ocp(
 
     # Add objective functions
     objective_functions = ObjectiveList()
-    objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=10, phase=0, min_bound=1, max_bound=5)
+    objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=10, phase=0, min_bound=0.5, max_bound=3)
+    objective_functions.add(ObjectiveFcn.Mayer.MINIMIZE_TIME, weight=10, phase=1, min_bound=0.5, max_bound=3)
     objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=10, phase=0)
+    objective_functions.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=10, phase=1)
 
     # Constraints
     constraints = ConstraintList()
     constraints.add(custom_constraint_max_tau, phase=0, node=Node.ALL_SHOOTING, min_bound=0, max_bound=tau_max)
     constraints.add(custom_constraint_min_tau, phase=0, node=Node.ALL_SHOOTING, min_bound=tau_min, max_bound=0)
+    #
+    constraints.add(custom_constraint_max_tau, phase=1, node=Node.ALL_SHOOTING, min_bound=0, max_bound=tau_max)
+    constraints.add(custom_constraint_min_tau, phase=1, node=Node.ALL_SHOOTING, min_bound=tau_min, max_bound=0)
 
-    # Dynamics
-    dynamics = DynamicsList()
-    dynamics.add(DynamicsFcn.TORQUE_DRIVEN, with_contact=False)
+    constraints.add(
+        ConstraintFcn.TRACK_STATE, key="q", phase=0, node=Node.START, target=[np.pi + 0.01, 0]
+    )  # Initial state
+    constraints.add(ConstraintFcn.TRACK_STATE, key="qdot", phase=0, node=Node.START, target=[0, 0])
+    constraints.add(ConstraintFcn.TRACK_STATE, key="q", index=1, phase=1, node=Node.START, target=np.pi)
+    constraints.add(ConstraintFcn.TRACK_STATE, key="q", phase=1, node=Node.END, target=[3 * np.pi, 0])  # Final state
 
-    # Path constraint
-    x_bounds = BoundsList()
-    x_bounds.add(key="q", bounds=bio_model.bounds_from_ranges("q"))
-    x_bounds.add(key="qdot", bounds=bio_model.bounds_from_ranges("qdot"))
-
-    x_bounds["q"].min[0, :] = 0
-    x_bounds["q"].max[0, :] = 3 * np.pi
-
-    x_bounds["q"].min[1, :] = -np.pi / 3
-    x_bounds["q"].max[1, :] = np.pi / 5
-
-    x_bounds["q"][0, 0] = np.pi + 0.01
-    x_bounds["q"][1, 0] = 0
-    x_bounds["qdot"][0, 0] = 0
-    x_bounds["qdot"][1, 0] = 0
-
-    x_bounds["q"][0, -1] = 3 * np.pi
-    x_bounds["q"][1, -1] = 0
-
-    # Define control path constraint
-    n_tau = len(tau_mappings[0]["tau"].to_first)
-    u_bounds = BoundsList()
-    u_bounds.add(key="tau", min_bound=[tau_min] * n_tau, max_bound=[tau_max] * n_tau, phase=0)
+    for i in range(len(bio_model)):
+        constraints.add(
+            ConstraintFcn.BOUND_STATE,
+            key="q",
+            phase=i,
+            node=Node.ALL,
+            min_bound=[np.pi, -np.pi / 3],
+            max_bound=[3 * np.pi, np.pi],
+        ),
 
     return OptimalControlProgram(
         bio_model,
         dynamics,
         n_shooting,
         final_time,
-        x_bounds=x_bounds,
-        u_bounds=u_bounds,
         objective_functions=objective_functions,
         parameter_objectives=parameter_objectives,
         parameter_bounds=parameter_bounds,
