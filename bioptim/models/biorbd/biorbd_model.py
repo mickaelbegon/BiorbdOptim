@@ -20,7 +20,7 @@ from ...misc.mapping import BiMapping, BiMappingList
 from ...misc.utils import check_version
 from ...optimization.parameters import ParameterList
 
-check_version(biorbd, "1.11.1", "1.12.0")
+check_version(biorbd, "1.11.1", "1.13.0")
 
 
 class BiorbdModel:
