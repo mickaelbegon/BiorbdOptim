@@ -4,6 +4,7 @@ from bioptim import Solver
 from bioptim.gui.online_callback_server import OnlineCallbackServer, _ResponseHeader
 from bioptim.gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from bioptim.interfaces.interface_utils import generic_online_optim
+from bioptim.interfaces.madnlp_options import MADNLP_UNAVAILABLE
 from bioptim.misc.enums import SolverType, OnlineOptim
 
 
@@ -19,6 +20,35 @@ class FakeInterface:
     def __init__(self, online_optim):
         self.opts = type("Opts", (), {"online_optim": online_optim})()
         self.options_common = {}
+
+
+def test_madnlp_solver_options(monkeypatch):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    assert solver.type == SolverType.MADNLP
+
+    solver.set_convergence_tolerance(1e-7)
+    solver.set_constraint_tolerance(2e-7)
+    solver.set_maximum_iterations(42)
+    solver.set_print_level(1)
+    solver.set_option_unsafe("exact", "hessian_approximation")
+    options = solver.as_dict(FakeSolver({"print_time": False}))
+    assert options == {
+        "madnlp": {
+            "tol": 2e-7,
+            "max_iter": 42,
+            "print_level": 1,
+            "hessian_approximation": "exact",
+        },
+        "print_time": False,
+    }
+
+
+def test_madnlp_unavailable(monkeypatch):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: False)
+    with pytest.raises(RuntimeError, match="CasADi MadNLP plugin is not available") as error:
+        Solver.MADNLP()
+    assert str(error.value) == MADNLP_UNAVAILABLE
 
 
 def test_ipopt_solver_options():

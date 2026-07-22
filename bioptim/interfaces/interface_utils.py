@@ -173,21 +173,18 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
     # Solve the problem
     tic = perf_counter()
     interface.out = {"sol": interface.shaked_ocp_solver.call(interface.limits)}
-    interface.out["sol"]["solver_time_to_optimize"] = interface.shaked_ocp_solver.stats()["t_wall_total"]
+    stats = interface.shaked_ocp_solver.stats()
+    madnlp_stats = stats.get("madnlp", {})
+    interface.out["sol"]["solver_time_to_optimize"] = stats.get("t_wall_total", 0.0)
     interface.out["sol"]["real_time_to_optimize"] = perf_counter() - tic
-    interface.out["sol"]["iter"] = interface.shaked_ocp_solver.stats()["iter_count"]
-    interface.out["sol"]["inf_du"] = (
-        interface.shaked_ocp_solver.stats()["iterations"]["inf_du"]
-        if "iteration" in interface.shaked_ocp_solver.stats()
-        else None
-    )
-    interface.out["sol"]["inf_pr"] = (
-        interface.shaked_ocp_solver.stats()["iterations"]["inf_pr"]
-        if "iteration" in interface.shaked_ocp_solver.stats()
-        else None
-    )
+    interface.out["sol"]["iter"] = stats.get("iter_count", 0)
+    iterations = stats.get("iterations", {})
+    interface.out["sol"]["inf_du"] = iterations.get("inf_du", madnlp_stats.get("dual_feas"))
+    interface.out["sol"]["inf_pr"] = iterations.get("inf_pr", madnlp_stats.get("primal_feas"))
     # To match acados convention (0 = success, 1 = error)
-    interface.out["sol"]["status"] = int(not interface.shaked_ocp_solver.stats()["success"])
+    interface.out["sol"]["status"] = int(not stats.get("success", False))
+    if "status" in madnlp_stats:
+        interface.out["sol"]["solver_diagnostics"] = {"return_status": madnlp_stats["status"]}
     interface.out["sol"]["solver"] = interface.solver_name
 
     # Make sure the graphs are showing the last iteration
