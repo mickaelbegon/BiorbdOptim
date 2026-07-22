@@ -1370,6 +1370,11 @@ class OptimalControlProgram:
 
                 self.ocp_solver = IpoptInterface(self)
 
+            elif solver.type == SolverType.MADNLP:
+                from ..interfaces.madnlp_interface import MadnlpInterface
+
+                self.ocp_solver = MadnlpInterface(self)
+
             elif solver.type == SolverType.SQP:
                 from ..interfaces.sqp_interface import SQPInterface
 
@@ -1387,7 +1392,7 @@ class OptimalControlProgram:
             self.set_warm_start(sol=warm_start)
 
         if self._is_warm_starting:
-            if solver.type == SolverType.IPOPT:
+            if solver.type in (SolverType.IPOPT, SolverType.MADNLP):
                 solver.set_warm_start_options(1e-10)
 
         self.ocp_solver.opts = solver
@@ -1397,7 +1402,7 @@ class OptimalControlProgram:
 
         return Solution.from_dict(self, self.ocp_solver.get_optimized_value())
 
-    def set_warm_start(self, sol: Solution):
+    def set_warm_start(self, sol: Solution, transfer_multipliers: bool | None = None):
         """
         Modify x and u initial guess based on a solution.
 
@@ -1405,6 +1410,9 @@ class OptimalControlProgram:
         ----------
         sol: Solution
             The solution to initiate the OCP from
+        transfer_multipliers: bool | None
+            Whether to transfer solver multipliers. By default they are reused only for IPOPT, whose NLP multiplier
+            layout is compatible. Acados QP multipliers require explicit opt-in and Acados-origin iterates.
         """
 
         state = sol.decision_states(to_merge=SolutionMerge.NODES)
@@ -1438,7 +1446,9 @@ class OptimalControlProgram:
 
         self.update_initial_guess(x_init=x_init_guess, u_init=u_init_guess, parameter_init=param_init_guess)
 
-        if self.ocp_solver:
+        if transfer_multipliers is None:
+            transfer_multipliers = self.ocp_solver is not None and self.ocp_solver.opts.type == SolverType.IPOPT
+        if self.ocp_solver and transfer_multipliers:
             self.ocp_solver.set_lagrange_multiplier(sol)
 
         self._is_warm_starting = True
