@@ -7,6 +7,7 @@ if not getattr(cas, "has_nlpsol", lambda _: False)("madnlp"):
     pytest.skip("CasADi MadNLP plugin is not available", allow_module_level=True)
 
 from bioptim import Solver
+from bioptim.examples.getting_started.pendulum import prepare_ocp
 
 
 def test_madnlp_casadi_plugin_and_warm_start_inputs():
@@ -33,3 +34,26 @@ def test_madnlp_casadi_plugin_and_warm_start_inputs():
     assert np.array(second["g"]).size == 1
     assert np.array(second["lam_x"]).size == 2
     assert np.array(second["lam_g"]).size == 1
+
+
+def test_madnlp_solves_bioptim_pendulum_ocp():
+    ocp = prepare_ocp(
+        "bioptim/examples/getting_started/models/pendulum.bioMod",
+        final_time=1,
+        n_shooting=20,
+        n_threads=1,
+    )
+    solver = Solver.MADNLP()
+    solver.set_convergence_tolerance(1e-6)
+    solver.set_constraint_tolerance(1e-6)
+    solver.set_maximum_iterations(500)
+    solver.set_print_level("ERROR")
+
+    solution = ocp.solve(solver)
+
+    assert solution.status == 0
+    assert float(solution.cost) == pytest.approx(68.046875234144, rel=1e-6)
+    assert np.max(np.abs(np.asarray(solution.constraints))) <= 1e-8
+    assert solution.iterations > 0
+    assert solution.inf_pr <= 1e-8
+    assert solution.inf_du <= 1e-8
