@@ -24,6 +24,7 @@ class SolverType(Enum):
     """
 
     IPOPT = "Ipopt"
+    MADNLP = "madnlp"
     ACADOS = "ACADOS"
     SQP = "SqpMethod"
     NONE = None

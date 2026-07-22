@@ -1411,7 +1411,7 @@ class OptimalControlProgram:
         sol: Solution
             The solution to initiate the OCP from
         transfer_multipliers: bool | None
-            Whether to transfer solver multipliers. By default they are reused only for IPOPT, whose NLP multiplier
+            Whether to transfer solver multipliers. By default they are reused for CasADi NLP solvers whose multiplier
             layout is compatible. Acados QP multipliers require explicit opt-in and Acados-origin iterates.
         """
 
@@ -1447,7 +1447,10 @@ class OptimalControlProgram:
         self.update_initial_guess(x_init=x_init_guess, u_init=u_init_guess, parameter_init=param_init_guess)
 
         if transfer_multipliers is None:
-            transfer_multipliers = self.ocp_solver is not None and self.ocp_solver.opts.type == SolverType.IPOPT
+            transfer_multipliers = self.ocp_solver is not None and self.ocp_solver.opts.type in (
+                SolverType.IPOPT,
+                SolverType.MADNLP,
+            )
         if self.ocp_solver and transfer_multipliers:
             self.ocp_solver.set_lagrange_multiplier(sol)
 

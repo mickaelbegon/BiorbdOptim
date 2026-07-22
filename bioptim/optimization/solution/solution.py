@@ -197,18 +197,18 @@ class Solution:
         if not isinstance(sol, dict):
             raise ValueError("The _sol entry should be a dictionary")
 
-        is_ipopt = sol["solver"] == SolverType.IPOPT.value
+        is_casadi_nlp = sol["solver"] in (SolverType.IPOPT.value, SolverType.MADNLP.value)
 
         return cls(
             ocp=ocp,
             vector=sol["x"],
-            cost=sol["f"] if is_ipopt else None,
-            constraints=sol["g"] if is_ipopt else None,
-            lam_g=sol["lam_g"] if is_ipopt else None,
-            lam_p=sol["lam_p"] if is_ipopt else None,
-            lam_x=sol["lam_x"] if is_ipopt else None,
-            inf_pr=sol["inf_pr"] if is_ipopt else None,
-            inf_du=sol["inf_du"] if is_ipopt else None,
+            cost=sol["f"] if is_casadi_nlp else None,
+            constraints=sol["g"] if is_casadi_nlp else None,
+            lam_g=sol["lam_g"] if is_casadi_nlp else None,
+            lam_p=sol["lam_p"] if is_casadi_nlp else None,
+            lam_x=sol["lam_x"] if is_casadi_nlp else None,
+            inf_pr=sol["inf_pr"] if is_casadi_nlp else None,
+            inf_du=sol["inf_du"] if is_casadi_nlp else None,
             solver_time_to_optimize=sol["solver_time_to_optimize"],
             real_time_to_optimize=sol["real_time_to_optimize"],
             iterations=sol["iter"],
