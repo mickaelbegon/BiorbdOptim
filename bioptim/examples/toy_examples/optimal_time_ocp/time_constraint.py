@@ -20,6 +20,7 @@ from bioptim import (
     PhaseDynamics,
     SolutionMerge,
     OnlineOptim,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 
@@ -33,6 +34,7 @@ def prepare_ocp(
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     expand_dynamics: bool = True,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> OptimalControlProgram:
     """
     Prepare the optimal control program
@@ -102,6 +104,7 @@ def prepare_ocp(
         u_bounds=u_bounds,
         objective_functions=objective_functions,
         constraints=constraints,
+        ordering_strategy=ordering_strategy,
     )
 
 

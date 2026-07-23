@@ -24,14 +24,19 @@ import numpy as np
 
 import bioptim
 from bioptim import ObjectiveFcn, ObjectiveList, OrderingStrategy, Solver
+from bioptim.examples.getting_started.example_inequality_constraint import prepare_ocp as prepare_contact_inequality
 from bioptim.examples.getting_started.basic_ocp import prepare_ocp as prepare_pendulum
 from bioptim.examples.toy_examples.acados.cube import prepare_ocp as prepare_cube
 from bioptim.examples.toy_examples.acados.static_arm import prepare_ocp as prepare_static_arm
+from bioptim.examples.toy_examples.optimal_time_ocp.multiphase_time_constraint import (
+    prepare_ocp as prepare_multiphase,
+)
+from bioptim.examples.toy_examples.optimal_time_ocp.time_constraint import prepare_ocp as prepare_free_time
 from bioptim.examples.utils import ExampleUtils
 
 
 SOLVER_NAMES = ("ipopt", "fatrop", "acados", "madnlp")
-CASE_NAMES = ("pendulum", "cube", "static_arm")
+CASE_NAMES = ("pendulum", "cube", "static_arm", "free_time", "multiphase", "contact_inequality")
 
 
 @dataclass
@@ -131,6 +136,33 @@ def prepare_case(case: str, n_shooting: int):
             n_threads=1,
             **common,
         )
+    if case == "free_time":
+        return prepare_free_time(
+            ExampleUtils.folder + "/models/pendulum.bioMod",
+            final_time=0.8,
+            time_min=0.6,
+            time_max=1.0,
+            **common,
+        )
+    if case == "multiphase":
+        return prepare_multiphase(
+            biorbd_model_path=ExampleUtils.folder + "/models/cube.bioMod",
+            final_time=(1.0, 1.0, 1.0),
+            time_min=(0.5, 0.5, 0.5),
+            time_max=(2.0, 2.0, 2.0),
+            n_shooting=(n_shooting, n_shooting, n_shooting),
+            ordering_strategy=OrderingStrategy.TIME_MAJOR,
+        )
+    if case == "contact_inequality":
+        return prepare_contact_inequality(
+            ExampleUtils.folder + "/models/2segments_4dof_2contacts.bioMod",
+            phase_time=0.3,
+            n_shooting=n_shooting,
+            min_bound=50,
+            max_bound=np.inf,
+            mu=0.2,
+            ordering_strategy=OrderingStrategy.TIME_MAJOR,
+        )
     raise ValueError(f"Unknown benchmark case: {case}")
 
 
@@ -163,14 +195,27 @@ def run_once(
         max_violation = None
         if constraints is not None:
             constraint_array = np.asarray(constraints, dtype=float)
-            max_violation = float(np.max(np.abs(constraint_array))) if constraint_array.size else 0.0
+            lower_bounds = np.asarray(ocp.ocp_solver.limits["lbg"], dtype=float)
+            upper_bounds = np.asarray(ocp.ocp_solver.limits["ubg"], dtype=float)
+            lower_violation = np.maximum(lower_bounds - constraint_array, 0.0)
+            upper_violation = np.maximum(constraint_array - upper_bounds, 0.0)
+            max_violation = (
+                float(np.max(np.maximum(lower_violation, upper_violation))) if constraint_array.size else 0.0
+            )
+
+        if solution.status != 0:
+            outcome = "solver_failure"
+        elif max_violation is not None and max_violation > 10 * tolerance:
+            outcome = "infeasible"
+        else:
+            outcome = "success"
 
         return RunResult(
             case=case,
             solver=solver_name,
             n_shooting=n_shooting,
             repetition=repetition,
-            outcome="success" if solution.status == 0 else "solver_failure",
+            outcome=outcome,
             build_s=build_s,
             solve_wall_s=solve_wall_s,
             solver_s=optional_float(solution.solver_time_to_optimize),
