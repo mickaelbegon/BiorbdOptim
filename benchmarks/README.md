@@ -93,6 +93,53 @@ Constraint violation is computed against each constraint's lower and upper
 bounds, rather than as `max(abs(g))`; this is essential for time, contact, and
 other inequality constraints whose feasible values are not zero.
 
+## Cyclic NMPC benchmark
+
+`nmpc_solver_benchmark.py` uses the repository's simple two-degree-of-freedom
+cyclic arm NMPC example. Generate one converged IPOPT horizon first, then give
+that exact primal/dual seed to both solvers. The seed file makes it possible to
+compare installations where IPOPT and alpaqa are provided by different CasADi
+environments:
+
+```bash
+python -m benchmarks.nmpc_solver_benchmark \
+  --solver ipopt --seed-output /tmp/bioptim_nmpc_seed.npz
+
+python -m benchmarks.nmpc_solver_benchmark \
+  --solver ipopt --seed-input /tmp/bioptim_nmpc_seed.npz \
+  --output benchmarks/results/nmpc_ipopt
+
+python -m benchmarks.nmpc_solver_benchmark \
+  --solver alpaqa --seed-input /tmp/bioptim_nmpc_seed.npz \
+  --output benchmarks/results/nmpc_alpaqa
+```
+
+The default problem has 20 shooting intervals, five consecutive windows, a
+`1e-4` tolerance, and a 0.5 s alpaqa deadline per window. After the common first
+window, Bioptim advances the horizon and shifts the previous trajectory to form
+the next initial guess. Failures do not stop the run: meeting the deadline is a
+measured outcome. JSON and CSV outputs contain status, cost, solver time,
+average wall time per window, and equality-constraint violation for every
+window. Use the same options and seed when comparing result files.
+
+A three-repetition smoke comparison (three windows per repetition) gave the
+following median solver times. As above, IPOPT used CasADi 3.7.2 and alpaqa used
+CasADi 3.8.0 on the same machine, so these figures validate the protocol but
+are not a controlled solver-only comparison.
+
+| Window | IPOPT status | IPOPT solver (s) | alpaqa status | alpaqa solver (s) | alpaqa violation |
+|---:|---:|---:|---:|---:|---:|
+| 0 (IPOPT seed) | 3/3 | 0.011 | 3/3 | 0.028 | 2.90e-5 |
+| 1 (shifted) | 3/3 | 0.161 | 0/3 | 0.504 | 3.87e-3 |
+| 2 (shifted) | 3/3 | 0.177 | 0/3 | 0.503 | 3.89e-3 |
+
+The first alpaqa solve is feasible and close to the IPOPT cost (a difference
+of about `1.1e-5`). With the 0.5 s deadline, however, alpaqa does not make the
+shifted warm starts feasible while IPOPT solves all windows. Improving how
+primal and dual warm starts are shifted for alpaqa is therefore the next useful
+optimization target; simply supplying an excellent first-window solution is
+not enough for this NMPC case.
+
 The holonomic-muscle case is the long stress benchmark. Its collocation
 formulation and implicit reconstruction of dependent coordinates are expensive,
 so it should be run separately from routine smoke benchmarks.
