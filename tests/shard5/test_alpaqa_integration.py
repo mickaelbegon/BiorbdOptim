@@ -28,3 +28,7 @@ def test_minimal_alpaqa_nlp():
     np.testing.assert_allclose(np.asarray(result["x"]).reshape(-1), [1, 2], atol=1e-5)
     assert float(result["f"]) == pytest.approx(0.0, abs=1e-10)
     assert float(result["g"]) == pytest.approx(3.0, abs=1e-6)
+    stats = solver.stats()
+    assert stats["success"] is True
+    assert stats["unified_return_status"] == "SOLVER_RET_SUCCESS"
+    assert "t_wall_total" in stats

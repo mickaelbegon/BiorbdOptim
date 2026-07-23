@@ -35,6 +35,8 @@ def maximum_bound_violation(value, lower_bound, upper_bound) -> float:
         )
     if value.size == 0:
         return 0.0
+    if not np.all(np.isfinite(value)):
+        return float("inf")
     return float(
         np.max(
             np.maximum.reduce(
@@ -67,6 +69,9 @@ class AlpaqaInterface(SolverInterface):
             )
         out = generic_solve(self, expand_during_shake_tree)
         solution = out["sol"]
+        stats = self.shaked_ocp_solver.stats()
+        solution["solver_stats"] = stats.copy()
+        solution["native_status"] = stats.get("unified_return_status")
         solution["inf_pr"] = maximum_bound_violation(
             solution["g"], self.limits["lbg"], self.limits["ubg"]
         )

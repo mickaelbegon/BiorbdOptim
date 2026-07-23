@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from bioptim import Solver
@@ -73,5 +74,6 @@ def test_maximum_bound_violation():
         0.1
     )
     assert maximum_bound_violation([1.0], [1.0], [1.0]) == 0.0
+    assert maximum_bound_violation([np.nan], [0.0], [2.0]) == float("inf")
     with pytest.raises(ValueError, match="identical dimensions"):
         maximum_bound_violation([1.0], [0.0, 0.0], [2.0, 2.0])

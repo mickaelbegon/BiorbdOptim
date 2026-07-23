@@ -175,7 +175,8 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
     interface.out = {"sol": interface.shaked_ocp_solver.call(interface.limits)}
     interface.out["sol"]["solver_time_to_optimize"] = interface.shaked_ocp_solver.stats()["t_wall_total"]
     interface.out["sol"]["real_time_to_optimize"] = perf_counter() - tic
-    interface.out["sol"]["iter"] = interface.shaked_ocp_solver.stats()["iter_count"]
+    # Not every CasADi nlpsol plugin exposes an iteration count (alpaqa notably does not).
+    interface.out["sol"]["iter"] = interface.shaked_ocp_solver.stats().get("iter_count", None)
     interface.out["sol"]["inf_du"] = (
         interface.shaked_ocp_solver.stats()["iterations"]["inf_du"]
         if "iteration" in interface.shaked_ocp_solver.stats()

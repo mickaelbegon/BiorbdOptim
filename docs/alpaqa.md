@@ -60,13 +60,17 @@ warm-started. The plugin returns the standard CasADi outputs `x`, `f`, `g`,
 
 Bioptim computes the final maximum constraint-bound violation and exposes it as
 `solution.inf_pr`. CasADi 3.7.2's plugin does not export the detailed ALM/PANOC
-statistics shown by native alpaqa, so outer/inner iteration counts, native stop
-reason, and dual residual are not claimed as available.
+statistics shown by native alpaqa, so outer/inner iteration counts and the dual
+residual are not available. CasADi does expose `success`,
+`unified_return_status`, evaluation counters, and evaluation/total timings.
 
-Online iteration callbacks and C dependency generation have not been verified
-for this plugin and are rejected explicitly. Alpaqa can be sensitive to
-scaling: Bioptim passes its scaled decision variables, but users should also
-keep constraint residuals at comparable orders of magnitude.
+Online iteration callbacks are not invoked by this plugin. Generating `nlp.c`
+and loading it with `casadi.Importer(..., "shell")` succeeds with CasADi 3.8.0,
+but reconstructing the alpaqa solver fails because the imported NLP does not
+provide the derivatives required by alpaqa. Bioptim therefore rejects
+`c_compile=True`. Alpaqa can be sensitive to scaling: Bioptim passes its scaled
+decision variables, but users should also keep constraint residuals at
+comparable orders of magnitude.
 
 The current `origin/master` uses direct multiple shooting and has no block
 shooting/DSS NLP transcription. Because this interface only consumes the final
