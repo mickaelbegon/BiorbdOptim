@@ -32,6 +32,7 @@ from bioptim import (
     OptimalControlProgram,
     SolutionMerge,
     Solver,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 import numpy as np
@@ -47,6 +48,8 @@ def prepare_ocp(
     n_shooting: int = 30,
     final_time: float = 1,
     expand_dynamics: bool = False,
+    n_threads: int = 1,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> (HolonomicMusclesBiorbdModel, OptimalControlProgram):
     """
     Prepare the program
@@ -148,7 +151,8 @@ def prepare_ocp(
             objective_functions=objective_functions,
             variable_mappings=variable_bimapping,
             constraints=constraints,
-            n_threads=24,
+            n_threads=n_threads,
+            ordering_strategy=ordering_strategy,
         ),
         bio_model,
     )

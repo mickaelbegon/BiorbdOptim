@@ -28,6 +28,9 @@ from bioptim.examples.getting_started.example_inequality_constraint import prepa
 from bioptim.examples.getting_started.basic_ocp import prepare_ocp as prepare_pendulum
 from bioptim.examples.toy_examples.acados.cube import prepare_ocp as prepare_cube
 from bioptim.examples.toy_examples.acados.static_arm import prepare_ocp as prepare_static_arm
+from bioptim.examples.toy_examples.holonomic_constraints.arm26_pendulum_swingup_muscle import (
+    prepare_ocp as prepare_holonomic_muscle,
+)
 from bioptim.examples.toy_examples.optimal_time_ocp.multiphase_time_constraint import (
     prepare_ocp as prepare_multiphase,
 )
@@ -36,7 +39,16 @@ from bioptim.examples.utils import ExampleUtils
 
 
 SOLVER_NAMES = ("ipopt", "fatrop", "acados", "madnlp")
-CASE_NAMES = ("pendulum", "cube", "static_arm", "free_time", "multiphase", "contact_inequality")
+CASE_NAMES = (
+    "pendulum",
+    "cube",
+    "static_arm",
+    "free_time",
+    "multiphase",
+    "contact_inequality",
+    "holonomic_muscle",
+)
+DEFAULT_CASE_NAMES = CASE_NAMES[:-1]
 
 
 @dataclass
@@ -163,6 +175,15 @@ def prepare_case(case: str, n_shooting: int):
             mu=0.2,
             ordering_strategy=OrderingStrategy.TIME_MAJOR,
         )
+    if case == "holonomic_muscle":
+        ocp, _ = prepare_holonomic_muscle(
+            ExampleUtils.folder + "/models/arm26_w_pendulum.bioMod",
+            n_shooting=n_shooting,
+            final_time=0.5,
+            n_threads=1,
+            ordering_strategy=OrderingStrategy.TIME_MAJOR,
+        )
+        return ocp
     raise ValueError(f"Unknown benchmark case: {case}")
 
 
@@ -291,7 +312,7 @@ def write_results(output: Path, metadata: dict, rows: list[RunResult]) -> tuple[
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(CASE_NAMES))
+    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(DEFAULT_CASE_NAMES))
     parser.add_argument("--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES))
     parser.add_argument("--sizes", nargs="+", type=int, default=[20, 50, 100])
     parser.add_argument("--repetitions", type=int, default=3)
