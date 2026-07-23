@@ -10,5 +10,6 @@ dependencies:
   - numpy >=2.4,<3
   - pip
   - pytest
+  - scipy
   - swig =4.3.1
   - tinyxml2
