@@ -34,6 +34,7 @@ from bioptim import (
     Solver,
     PhaseDynamics,
     OnlineOptim,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 
@@ -48,6 +49,7 @@ def prepare_ocp(
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     n_threads: int = 8,
     expand_dynamics: bool = True,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> OptimalControlProgram:
     """
     Prepare the ocp
@@ -75,6 +77,9 @@ def prepare_ocp(
         If the dynamics function should be expanded. Please note, this will solve the problem faster, but will slow down
         the declaration of the OCP, so it is a trade-off. Also depending on the solver, it may or may not work
         (for instance IRK is not compatible with expanded dynamics)
+    ordering_strategy: OrderingStrategy
+        The ordering used for the optimization variables. FATROP requires
+        ``OrderingStrategy.TIME_MAJOR``.
 
     Returns
     -------
@@ -209,6 +214,7 @@ def prepare_ocp(
         constraints=constraint,
         use_sx=False,
         n_threads=n_threads,
+        ordering_strategy=ordering_strategy,
     )
 
 

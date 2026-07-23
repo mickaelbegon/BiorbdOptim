@@ -201,6 +201,7 @@ def prepare_case(case: str, n_shooting: int):
             torque_level=1,
             n_threads=1,
             expand_dynamics=True,
+            ordering_strategy=OrderingStrategy.TIME_MAJOR,
         )
     raise ValueError(f"Unknown benchmark case: {case}")
 

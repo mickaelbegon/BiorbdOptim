@@ -64,7 +64,7 @@ Run the Hessian-heavy muscle-fatigue benchmark separately:
 ```bash
 python -m benchmarks.solver_benchmark \
   --cases muscle_fatigue \
-  --solvers ipopt madnlp \
+  --solvers ipopt fatrop madnlp \
   --sizes 50 \
   --warmups 1 \
   --repetitions 1
@@ -95,7 +95,7 @@ and does not reuse the previous solution.
 | Multiphase | 10/phase | 0.298 | 0.341 | 33846.126974 | 7.024 | **0.275** | 33846.126974 | Yes | MadNLP 19% faster |
 | Contact inequalities | 10 | 4.566 | 4.180 | 0.151329095 | 9.287 | **4.089** | 0.151329095 | Yes | MadNLP 2% faster |
 | Holonomic muscle | 5 | **22.065** | **20.013** | 0.013516468 | 26.888 | 20.360 | 0.013516468 | Yes | IPOPT 2% faster hot |
-| Muscle fatigue | 50 | **8.109** | 9.231 | 17.288825 | 12.914 | **6.621** | 17.288821 | Yes | MadNLP 28% faster hot |
+| Muscle fatigue | 50 | **7.659** | 7.985 | 17.288825 | 13.797 | **6.630** | 17.288821 | Yes | MadNLP 17% faster hot |
 
 MadNLP's cold penalty is 4–8 seconds on the smaller cases because Julia is
 initialized on the first solve. Once hot, MadNLP is competitive or faster on
@@ -117,18 +117,22 @@ actuators with Xia fatigue states, residual joint torques, and exact second
 derivatives. The derivative timings below are CasADi's cumulative hot-run
 measurements inside the nonlinear solver.
 
-| Solver | Hot `solve()` (s) | Hot solver (s) | Iterations | Solver time/iteration (ms) | Hessian (s) | Constraint Jacobian (s) | Cost |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| IPOPT | 9.231 | 8.385 | 67 | 125.2 | 3.549 | 3.098 | 17.288825 |
-| MadNLP | **6.621** | **5.614** | **62** | **90.6** | **2.549** | **2.061** | 17.288821 |
+| Solver | Cold `solve()` (s) | Hot `solve()` (s) | Hot solver (s) | Iterations | Solver time/iteration (ms) | Hessian (s) | Constraint Jacobian (s) | Cost |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| IPOPT | **7.659** | 7.985 | 7.210 | 67 | 107.6 | 3.124 | 2.529 | 17.288825 |
+| FATROP | 25.093 | 25.470 | 23.934 | 170 | 140.8 | 8.454 | 6.206 | 17.288833 |
+| MadNLP | 13.797 | **6.630** | **5.646** | **62** | **91.1** | **2.575** | **2.066** | 17.288821 |
 
-MadNLP's hot solver time is 33% lower. Its iteration count is only 7.5% lower,
-whereas its measured time per iteration is 27.6% lower. The result therefore
-shows that iteration count alone does not explain performance when biomechanical
-dynamics make exact Hessian and constraint-Jacobian evaluations expensive.
-Hessian and Jacobian evaluation together account for 79% of IPOPT's hot solver
-time and 82% of MadNLP's. The two solutions have a relative cost difference of
-`1.99e-5%`.
+MadNLP's hot solver time is 22% lower than IPOPT's. Its iteration count is 7.5%
+lower and its measured time per iteration is 15.4% lower. FATROP takes 2.54 times
+as many iterations as IPOPT and each iteration is 31% more expensive, producing
+a solver time 3.32 times as long. This result shows that iteration count and
+per-iteration derivative cost both matter when biomechanical dynamics make exact
+Hessian and constraint-Jacobian evaluations expensive.
+
+Hessian and Jacobian evaluation together account for 78% of IPOPT's hot solver
+time, 61% of FATROP's, and 82% of MadNLP's. All three solvers converge to
+equivalent costs; the largest relative difference is below `4.7e-5%`.
 
 | Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
 |---|---:|---|---:|---:|---:|---:|---:|
