@@ -67,6 +67,28 @@ These cold, single-run figures validate the benchmark but are insufficient for
 performance conclusions. The pendulum's zero initial trajectory is particularly
 poor for PANOC and generates non-finite dynamics evaluations.
 
+### Alpaqa versus IPOPT
+
+The cube case was then run with one warm-up and three measured repetitions.
+Alpaqa used Python 3.11/CasADi 3.8.0; IPOPT used Python 3.14/CasADi 3.7.2 because
+the available CasADi 3.8 environment contains an ABI-incompatible IPOPT plugin.
+The figures therefore compare the solver integrations on the same machine and
+problem definition, but not within an identical runtime environment.
+
+| Shooting | Solver | Build median (s) | `solve()` median (s) | Solver median (s) | Cost | Max. violation |
+|---:|---|---:|---:|---:|---:|---:|
+| 5 | IPOPT | 0.058 | 0.102 | 0.079 | 1117.237740 | 1.33e-15 |
+| 5 | alpaqa | 0.092 | 0.172 | 0.126 | 1117.237758 | 2.36e-7 |
+| 10 | IPOPT | 0.082 | 0.116 | 0.075 | 1117.997079 | 1.33e-15 |
+| 10 | alpaqa | 0.182 | 0.720 | 0.656 | 1117.997099 | 6.24e-7 |
+
+On this small problem, alpaqa is 1.68 times slower than IPOPT in `solve()` at
+five shooting intervals and 6.21 times slower at ten intervals. Its solution
+cost differs by less than `2e-5`, and its final constraint violation remains
+below the requested `1e-6` tolerance. These results do not yet support a speed
+advantage for alpaqa; NMPC-style warm starts and time-limited repeated solves
+should be benchmarked separately.
+
 Constraint violation is computed against each constraint's lower and upper
 bounds, rather than as `max(abs(g))`; this is essential for time, contact, and
 other inequality constraints whose feasible values are not zero.
