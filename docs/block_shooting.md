@@ -86,3 +86,22 @@ variables and matching constraints.
 
 See [`bioptim/examples/getting_started/block_shooting.py`](../bioptim/examples/getting_started/block_shooting.py) for
 an executable pendulum example.
+
+## Reproducible benchmark
+
+The muscle-driven arm-reaching benchmark compares historical DMS, DSS, and selected block counts in isolated
+subprocesses. It reports NLP dimensions, constraint-Jacobian sparsity, construction and solve times, iterations,
+objective value, and peak resident memory:
+
+```bash
+python -m bioptim.examples.benchmarks.block_shooting_arm_reaching \
+    --n-shooting 50 \
+    --blocks 1 5 10 25 50 \
+    --repeat 3 \
+    --output block_shooting_arm_reaching.json
+```
+
+Use `--build-only` for a fast construction and sparsity comparison without invoking IPOPT. Peak RSS includes the
+Python interpreter and imported native libraries; each measurement runs in a fresh process so this baseline is
+consistent across transcriptions. IPOPT uses its limited-memory Hessian approximation by default to keep the
+muscle-driven problem tractable; pass `--hessian-approximation exact` to benchmark exact second derivatives.
