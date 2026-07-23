@@ -74,7 +74,10 @@ class OnlineCallbackMultiprocess(OnlineCallbackAbstract):
         self.plot_process.start()
 
     def close(self) -> None:
-        self.plot_process.kill()
+        if self.plot_process.is_alive():
+            self.plot_process.kill()
+        self.plot_process.join(timeout=5)
+        self.queue.close()
 
     def eval(self, arg: AnyIterable, enforce: Bool = False) -> IntListOptional:
         # Dequeuing the data by removing previous not useful data
