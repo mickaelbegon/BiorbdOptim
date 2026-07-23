@@ -1,6 +1,9 @@
 name: MadNLP Linux
 
 on:
+  push:
+    branches:
+      - codex/madnlp-integration-master
   pull_request:
     paths:
       - ".github/madnlp-linux-environment.yml"
@@ -110,7 +113,7 @@ jobs:
 
   benchmark:
     name: Complete Linux benchmark
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     needs: integration-tests
     runs-on: ubuntu-22.04
     timeout-minutes: 90
@@ -174,8 +177,8 @@ jobs:
         env:
           MPLCONFIGDIR: /tmp/matplotlib
           PYTHONPATH: ${{ github.workspace }}
-          WARMUPS: ${{ inputs.warmups }}
-          REPETITIONS: ${{ inputs.repetitions }}
+          WARMUPS: ${{ inputs.warmups || '1' }}
+          REPETITIONS: ${{ inputs.repetitions || '1' }}
         run: |
           result_root="$GITHUB_WORKSPACE/benchmarks/results/linux"
           mkdir -p "$result_root"
