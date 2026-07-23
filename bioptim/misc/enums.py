@@ -25,6 +25,7 @@ class SolverType(Enum):
 
     IPOPT = "Ipopt"
     FATROP = "Fatrop"
+    ALPAQA = "Alpaqa"
     ACADOS = "ACADOS"
     SQP = "SqpMethod"
     NONE = None

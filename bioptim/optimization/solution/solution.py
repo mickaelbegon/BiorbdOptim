@@ -207,7 +207,7 @@ class Solution:
         if not isinstance(sol, dict):
             raise ValueError("The _sol entry should be a dictionary")
 
-        is_ipopt_like = sol["solver"] in (SolverType.IPOPT.value, SolverType.FATROP.value)
+        is_ipopt_like = sol["solver"] in (SolverType.IPOPT.value, SolverType.FATROP.value, SolverType.ALPAQA.value)
 
         return cls(
             ocp=ocp,
