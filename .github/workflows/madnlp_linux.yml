@@ -1,9 +1,6 @@
 name: MadNLP Linux
 
 on:
-  push:
-    branches:
-      - codex/madnlp-integration-master
   pull_request:
     paths:
       - ".github/madnlp-linux-environment.yml"

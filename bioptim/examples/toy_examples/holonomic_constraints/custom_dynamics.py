@@ -1,7 +1,3 @@
-import os
-
-print(os.getenv("PYTHONPATH"))
-
 from typing import Callable
 
 import numpy as np

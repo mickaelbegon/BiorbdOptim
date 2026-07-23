@@ -10,13 +10,19 @@ MadNLP:
 - `multiphase`: three linked cube motions with one free time per phase;
 - `contact_inequality`: jump with unilateral contact and non-slipping inequalities;
 - `holonomic_muscle`: muscle-driven arm/pendulum swing-up with dependent
-  coordinates, an iterative holonomic reconstruction, and direct collocation.
+  coordinates, an iterative holonomic reconstruction, and direct collocation;
 - `muscle_fatigue`: muscle-driven reaching with Xia fatigue states, residual
   torques, direct collocation, and an exact Hessian.
 
 It records OCP construction time, wall-clock solve time, solver time, iterations,
 cost, status, constraint violation, objective/constraint derivative evaluation
 times, and whether each run is cold or hot in JSON and CSV files.
+
+All solvers use a tolerance of `1e-6`, at most 500 iterations, one thread, and
+`OrderingStrategy.TIME_MAJOR`. The latter is required by FATROP and ensures that
+the compared nonlinear solvers receive the same variable ordering.
+
+## Run locally
 
 Run a small comparison from the repository root:
 
@@ -29,37 +35,22 @@ python -m benchmarks.solver_benchmark \
   --repetitions 3
 ```
 
-All solvers use a tolerance of `1e-6`, at most 500 iterations, one thread, and
-`OrderingStrategy.TIME_MAJOR`. The latter is required by FATROP and ensures that
-the compared solvers receive the same variable ordering.
-
 Unavailable solvers and runtime failures are written to the result files instead
 of aborting the remaining matrix. For ACADOS installed outside its default
 location, pass `--acados-dir /path/to/acados`.
 
-Run a larger multiple-shooting stress case with 500 pendulum intervals:
+Run the 500-interval pendulum stress case:
 
 ```bash
 python -m benchmarks.solver_benchmark \
   --cases pendulum \
-  --solvers ipopt madnlp \
+  --solvers ipopt fatrop madnlp \
   --sizes 500 \
   --warmups 1 \
   --repetitions 1
 ```
 
-Run the long holonomic stress case separately:
-
-```bash
-python -m benchmarks.solver_benchmark \
-  --cases holonomic_muscle \
-  --solvers ipopt fatrop madnlp \
-  --sizes 5 \
-  --warmups 0 \
-  --repetitions 1
-```
-
-Run the Hessian-heavy muscle-fatigue benchmark separately:
+Run the Hessian-heavy muscle-fatigue benchmark:
 
 ```bash
 python -m benchmarks.solver_benchmark \
@@ -70,111 +61,148 @@ python -m benchmarks.solver_benchmark \
   --repetitions 1
 ```
 
-## Preliminary results
+## Reproducible Linux environment
 
-The following smoke benchmark was run on macOS on 2026-07-22. Each cell is one
-cold execution without a warm-up, with a tolerance of `1e-6` and at most 200
-iterations. These measurements validate the benchmark and solver integrations;
-use multiple warm-ups and repetitions for performance conclusions.
+The official CasADi 3.7.2 Linux wheel contains the IPOPT, FATROP, and MadNLP
+plugins. It uses the old libstdc++ C++11 ABI, so a Conda biorbd build cannot be
+mixed with it. The CI compiles the pinned RBDL-CasADi commit and biorbd 1.12.2
+against that same wheel:
 
-### Global cold-versus-hot comparison: IPOPT and MadNLP
+```bash
+conda env create -f .github/madnlp-linux-environment.yml
+conda activate bioptim-madnlp-linux
+python -m pip install --no-deps casadi==3.7.2
+.github/scripts/install_biorbd_casadi_linux.sh
+python -m pip install --no-deps -e .
 
-These paired measurements were run on 2026-07-23. A **cold** measurement is the
-first solve in a fresh Python process. A **hot** measurement rebuilds both the OCP
-and the solver after one successful solve in the same process; it therefore
-amortizes global plugin and Julia initialization, but it is not an OCP warm start
-and does not reuse the previous solution.
+mkdir -p .cache/madnlp
+curl --fail --location --retry 3 \
+  https://github.com/tmmsartor/madnlp_c/releases/download/nightly-cpu_only/madnlp-jl1.10.4-ubuntu-20.04-x64.zip \
+  --output /tmp/madnlp-jl1.10.4-ubuntu-20.04-x64.zip
+echo "333c42a1beb04fdba84410cc861927a74c3591c3b9cffd15323cbfeb44fbc8a0  /tmp/madnlp-jl1.10.4-ubuntu-20.04-x64.zip" \
+  | sha256sum --check
+unzip -q /tmp/madnlp-jl1.10.4-ubuntu-20.04-x64.zip -d .cache/madnlp
+export LD_LIBRARY_PATH="$PWD/.cache/madnlp/foo/lib:${LD_LIBRARY_PATH:-}"
+```
 
-| Case | Shooting | IPOPT cold (s) | IPOPT hot (s) | IPOPT cost | MadNLP cold (s) | MadNLP hot (s) | MadNLP cost | Cost equivalence | Hot comparison |
-|---|---:|---:|---:|---:|---:|---:|---:|---|---|
-| Pendulum | 20 | 0.805 | 0.686 | 91.835622 | 7.960 | **0.396** | 68.046875 | No: different local minimum | MadNLP 42% faster |
-| Pendulum | 500 | **18.266** | **18.945** | 35.664490 | 27.239 | 23.292 | 35.664490 | Yes | IPOPT 19% faster |
-| Cube | 10 | 0.178 | 0.211 | 1117.997079 | 9.643 | **0.023** | 1117.997245 | Yes | MadNLP about 9x faster |
-| Static arm | 10 | **20.364** | 31.497 | 330.979798 | 27.483 | **23.320** | 330.979936 | Yes | MadNLP 26% faster hot |
-| Free time | 10 | **0.680** | **0.759** | 220.463496 | failure | failure | — | Not comparable | IPOPT only successful solver |
-| Multiphase | 10/phase | 0.298 | 0.341 | 33846.126974 | 7.024 | **0.275** | 33846.126974 | Yes | MadNLP 19% faster |
-| Contact inequalities | 10 | 4.566 | 4.180 | 0.151329095 | 9.287 | **4.089** | 0.151329095 | Yes | MadNLP 2% faster |
-| Holonomic muscle | 5 | **22.065** | **20.013** | 0.013516468 | 26.888 | 20.360 | 0.013516468 | Yes | IPOPT 2% faster hot |
-| Muscle fatigue | 50 | **7.659** | 7.985 | 17.288825 | 13.797 | **6.630** | 17.288821 | Yes | MadNLP 17% faster hot |
+The workflow downloads the pinned MadNLP C/Julia runtime, verifies its SHA-256,
+adds its `lib` directory to `LD_LIBRARY_PATH`, and checks all three CasADi
+plugins before running tests. The exact download and environment setup are in
+[`madnlp_linux.yml`](../.github/workflows/madnlp_linux.yml).
 
-MadNLP's cold penalty is 4–8 seconds on the smaller cases because Julia is
-initialized on the first solve. Once hot, MadNLP is competitive or faster on
-most successful cases. The free-time failure remains a robustness gap. Each
-column currently contains one paired observation, so small differences—especially
-the 2% contact and holonomic gaps—should be confirmed with repeated measurements.
-On the 500-interval pendulum, both solvers converge to cost `35.664490` with a
-maximum constraint violation below `1.86e-9`; IPOPT remains faster both cold and
-hot, while MadNLP reduces its startup-inclusive time by 3.95 seconds once hot.
-Except for the 20-interval pendulum, all problems solved by both solvers have a
-relative cost difference below `4.2e-5%`. The 20-interval pendulum is therefore
-a speed comparison between distinct local solutions, not an equivalent-solution
-comparison.
+Pull requests that modify the integration, benchmark, or solver interfaces run
+the MadNLP tests and a three-solver smoke benchmark. A manual
+`workflow_dispatch` runs the full four-solver matrix and uploads JSON, CSV, and
+Markdown artifacts.
+
+## Linux CI results
+
+These measurements come from
+[GitHub Actions run 30048124748](https://github.com/mickaelbegon/BiorbdOptim/actions/runs/30048124748),
+executed on 2026-07-23:
+
+- Ubuntu 22.04 runner, Linux `6.8.0-1062-azure`, x86-64, glibc 2.35;
+- Python 3.11.15, Bioptim 3.5.0, CasADi 3.7.2;
+- one warm-up and one measured hot solve;
+- tolerance `1e-6`, at most 500 iterations, one thread.
+
+A **cold** measurement is the first solve in a fresh Python process. A **hot**
+measurement rebuilds both the OCP and solver after one successful solve in the
+same process. It therefore amortizes plugin and Julia initialization, but it is
+not an OCP warm start and does not reuse the previous solution. Each
+case/solver combination runs in its own process. Since each column contains one
+observation, small differences should be treated as ties until repeated.
+
+### Complete table
+
+| Case | Shooting | Solver | Cold solve (s) | Hot solve (s) | Hot solver (s) | Hot iter. | Cost | Max violation | Outcome |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---|
+| Pendulum | 20 | IPOPT | 0.727 | 0.724 | 0.159 | 24 | 91.835622 | 6.95e-13 | success |
+| Pendulum | 20 | FATROP | 0.778 | 0.771 | 0.167 | 28 | 79.609055 | 2.66e-14 | success |
+| Pendulum | 20 | ACADOS | — | — | — | — | — | — | solver failure |
+| Pendulum | 20 | MadNLP | 1.584 | 0.751 | 0.188 | 26 | 68.046607 | 1.24e-14 | success |
+| Pendulum | 500 | IPOPT | 40.871 | 40.398 | 25.992 | 176 | 35.664490 | 1.85e-09 | success |
+| Pendulum | 500 | FATROP | 39.047 | 38.899 | 22.681 | 152 | 35.664490 | 1.83e-09 | success |
+| Pendulum | 500 | ACADOS | — | — | — | — | — | — | solver failure |
+| Pendulum | 500 | MadNLP | **34.312** | **33.430** | **18.881** | **126** | 35.664458 | 1.42e-14 | success |
+| Cube | 10 | IPOPT | 0.044 | 0.042 | 0.010 | 13 | 1117.997079 | 1.33e-15 | success |
+| Cube | 10 | FATROP | **0.039** | **0.038** | **0.002** | 15 | 1117.997079 | 1.78e-15 | success |
+| Cube | 10 | ACADOS | 2.181 | 2.158 | 0.001 | 1 | 180370.953774 | — | success, non-equivalent cost |
+| Cube | 10 | MadNLP | 0.867 | 0.045 | 0.013 | 12 | 1117.995088 | 1.33e-15 | success |
+| Static arm | 10 | IPOPT | **35.344** | 35.284 | 15.414 | 69 | 330.979798 | 9.67e-10 | success |
+| Static arm | 10 | FATROP | 37.234 | 37.975 | 17.012 | 75 | 382.661494 | 8.86e-10 | success, different local minimum |
+| Static arm | 10 | ACADOS | — | — | — | — | — | — | solver failure |
+| Static arm | 10 | MadNLP | 35.448 | **34.590** | **15.048** | **67** | 330.979327 | 2.57e-08 | success |
+| Free time | 10 | IPOPT | 0.771 | 0.756 | 0.598 | 54 | 220.463496 | 9.96e-09 | success |
+| Free time | 10 | FATROP | — | — | — | — | — | — | unsupported structure |
+| Free time | 10 | ACADOS | — | — | — | — | — | — | requires SX graph |
+| Free time | 10 | MadNLP | — | — | — | — | — | — | runtime failure |
+| Multiphase | 10/phase | IPOPT | **0.453** | 0.457 | 0.141 | 11 | 33846.126974 | 4.88e-15 | success |
+| Multiphase | 10/phase | FATROP | — | — | — | — | — | — | unsupported structure |
+| Multiphase | 10/phase | ACADOS | — | — | — | — | — | — | requires SX graph |
+| Multiphase | 10/phase | MadNLP | 1.321 | **0.449** | **0.132** | **10** | 33846.126974 | 3.11e-15 | success |
+| Contact inequalities | 10 | IPOPT | **7.073** | **7.041** | **6.499** | **57** | 0.151329095 | 1.27e-10 | success |
+| Contact inequalities | 10 | FATROP | 15.917 | 16.081 | 15.529 | 118 | 0.151329186 | 4.13e-14 | success |
+| Contact inequalities | 10 | ACADOS | — | — | — | — | — | — | requires SX graph |
+| Contact inequalities | 10 | MadNLP | 6.564 | — | — | — | 0.151328262 | 2.84e-05 | infeasible |
+| Holonomic muscle | 5 | IPOPT | **32.652** | **33.325** | **31.945** | 27 | 0.013516468 | 7.15e-07 | success |
+| Holonomic muscle | 5 | FATROP | 36.879 | 37.075 | 35.680 | 29 | 0.013516606 | 5.38e-07 | success |
+| Holonomic muscle | 5 | ACADOS | — | — | — | — | — | — | requires SX graph |
+| Holonomic muscle | 5 | MadNLP | 34.382 | 33.401 | 32.010 | 27 | 0.013515161 | 2.28e-07 | success |
+| Muscle fatigue | 50 | IPOPT | 22.938 | 23.002 | 21.788 | 67 | 17.288825 | 2.37e-08 | success |
+| Muscle fatigue | 50 | FATROP | 64.233 | 64.353 | 62.411 | 168 | 17.288832 | 5.47e-08 | success |
+| Muscle fatigue | 50 | ACADOS | — | — | — | — | — | — | requires SX graph |
+| Muscle fatigue | 50 | MadNLP | **18.348** | **17.397** | **16.171** | **57** | 17.288543 | 3.46e-12 | success |
+
+The benchmark classifies a solve as infeasible when the maximum bound violation
+exceeds `10 × tolerance`. This is why the MadNLP contact result is reported as
+infeasible despite returning solver status zero. Constraint violation is
+computed against each constraint's lower and upper bounds, rather than as
+`max(abs(g))`.
+
+### IPOPT versus MadNLP
+
+MadNLP and IPOPT both succeed on seven of the nine problem sizes. Their main
+Linux results are:
+
+- MadNLP is 17% faster hot on the 500-interval pendulum (`33.430` versus
+  `40.398` s) and uses 28% fewer iterations.
+- MadNLP is 24% faster hot on the Hessian-heavy muscle-fatigue problem
+  (`17.397` versus `23.002` s).
+- Static arm and multiphase favor MadNLP by 2%, while the cube and holonomic
+  cases are within 7% and should be treated as ties with only one observation.
+- IPOPT is the only successful solver on `free_time`. On contact inequalities,
+  MadNLP returns a nearly identical cost but misses the benchmark feasibility
+  threshold.
+- The 20-interval pendulum converges to different local minima, so its timings
+  do not compare equivalent solutions.
+
+For the six shared-success cases other than the 20-interval pendulum, the
+largest IPOPT/MadNLP relative cost difference is below `0.01%`. The cold
+MadNLP overhead on small Linux cases is about 0.8 s, substantially smaller than
+the earlier macOS measurements.
 
 ### Hessian-heavy biomechanics case
 
 The `muscle_fatigue` case uses 50 direct-collocation intervals, six muscle
 actuators with Xia fatigue states, residual joint torques, and exact second
-derivatives. The derivative timings below are CasADi's cumulative hot-run
-measurements inside the nonlinear solver.
+derivatives. Derivative times are CasADi's cumulative hot-run measurements
+inside the nonlinear solver.
 
-| Solver | Cold `solve()` (s) | Hot `solve()` (s) | Hot solver (s) | Iterations | Solver time/iteration (ms) | Hessian (s) | Constraint Jacobian (s) | Cost |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| IPOPT | **7.659** | 7.985 | 7.210 | 67 | 107.6 | 3.124 | 2.529 | 17.288825 |
-| FATROP | 25.093 | 25.470 | 23.934 | 170 | 140.8 | 8.454 | 6.206 | 17.288833 |
-| MadNLP | 13.797 | **6.630** | **5.646** | **62** | **91.1** | **2.575** | **2.066** | 17.288821 |
+| Solver | Cold solve (s) | Hot solve (s) | Hot solver (s) | Iter. | Solver/iter. (ms) | Hessian (s) | Constraint Jacobian (s) | Cost | Max violation |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| IPOPT | 22.938 | 23.002 | 21.788 | 67 | 325.2 | 7.978 | 10.277 | 17.288825 | 2.37e-08 |
+| FATROP | 64.233 | 64.353 | 62.411 | 168 | 371.5 | 23.147 | 22.836 | 17.288832 | 5.47e-08 |
+| MadNLP | **18.348** | **17.397** | **16.171** | **57** | **283.7** | **6.838** | **7.539** | 17.288543 | 3.46e-12 |
+| ACADOS | — | — | — | — | — | — | — | — | requires SX graph |
 
-MadNLP's hot solver time is 22% lower than IPOPT's. Its iteration count is 7.5%
-lower and its measured time per iteration is 15.4% lower. FATROP takes 2.54 times
-as many iterations as IPOPT and each iteration is 31% more expensive, producing
-a solver time 3.32 times as long. This result shows that iteration count and
-per-iteration derivative cost both matter when biomechanical dynamics make exact
-Hessian and constraint-Jacobian evaluations expensive.
+MadNLP's hot solver time is 26% lower than IPOPT's. It takes 15% fewer
+iterations, and each iteration is 13% faster. FATROP takes 2.5 times as many
+iterations as IPOPT and 14% longer per iteration, producing a solver time
+2.9 times as long. Hessian and constraint-Jacobian evaluation together account
+for 84% of IPOPT's hot solver time, 74% of FATROP's, and 89% of MadNLP's.
 
-Hessian and Jacobian evaluation together account for 78% of IPOPT's hot solver
-time, 61% of FATROP's, and 82% of MadNLP's. All three solvers converge to
-equivalent costs; the largest relative difference is below `4.7e-5%`.
-
-| Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
-|---|---:|---|---:|---:|---:|---:|---:|
-| Pendulum | 20 | IPOPT | 0.790 | 0.340 | 24 | 91.835622 | 6.96e-13 |
-| Pendulum | 20 | FATROP | 0.426 | 0.053 | 28 | 79.609055 | 2.31e-14 |
-| Pendulum | 20 | MadNLP | 6.715 | 3.808 | 24 | 68.046875 | 3.85e-13 |
-| Cube | 10 | IPOPT | 0.249 | 0.198 | 13 | 1117.997079 | 1.33e-15 |
-| Cube | 10 | FATROP | 0.070 | 0.002 | 15 | 1117.997079 | 1.78e-15 |
-| Cube | 10 | MadNLP | 11.340 | 7.570 | 11 | 1117.997245 | 7.55e-15 |
-| Static arm | 10 | IPOPT | 38.415 | 13.304 | 69 | 330.979798 | 9.67e-10 |
-| Static arm | 10 | FATROP | 31.133 | 9.649 | 75 | 382.661494 | 8.86e-10 |
-| Static arm | 10 | MadNLP | 32.367 | 11.342 | 67 | 330.979936 | 2.24e-08 |
-| Free time | 10 | IPOPT | 1.248 | 1.118 | 54 | 220.463496 | 9.96e-09 |
-| Multiphase | 10/phase | IPOPT | 0.423 | 0.191 | 11 | 33846.126974 | 4.88e-15 |
-| Multiphase | 10/phase | MadNLP | 0.256 | 0.067 | 10 | 33846.126974 | 4.88e-15 |
-| Contact inequalities | 10 | IPOPT | 4.273 | 3.929 | 57 | 0.151329 | 1.27e-10 |
-| Contact inequalities | 10 | FATROP | 7.596 | 7.171 | 114 | 0.151329 | 4.49e-14 |
-| Contact inequalities | 10 | MadNLP | 4.304 | 3.905 | 71 | 0.151329 | 2.72e-12 |
-| Holonomic muscle | 5 | IPOPT | 34.192 | 31.606 | 27 | 0.01351647 | 7.15e-07 |
-| Holonomic muscle | 5 | FATROP | 62.248 | 59.536 | 29 | 0.01351661 | 5.38e-07 |
-| Holonomic muscle | 5 | MadNLP | 101.477 | 70.904 | 26 | 0.01351647 | 7.15e-07 |
-
-ACADOS was unavailable in the tested environments. IPOPT and FATROP used CasADi
-3.7.2; MadNLP used the CasADi 3.8.0 MadNLP build. MadNLP's cold times include
-Julia startup. The different costs on the pendulum and static-arm cases indicate
-different local optima from the same initial guess, so speed must be interpreted
-together with objective value and feasibility.
-
-The same smoke run also records unsupported or failing combinations:
-
-| Case | Solver | Outcome |
-|---|---|---|
-| Free time | FATROP | CasADi FATROP structure detection rejects the NLP layout |
-| Free time | MadNLP | line search evaluates a constraint at NaN and aborts |
-| Multiphase | FATROP | CasADi FATROP structure detection rejects the NLP layout |
-
-Constraint violation is computed against each constraint's lower and upper
-bounds, rather than as `max(abs(g))`; this is essential for time, contact, and
-other inequality constraints whose feasible values are not zero.
-
-The holonomic-muscle case is the long stress benchmark. Even at only five
-shooting intervals, its collocation formulation and implicit reconstruction of
-dependent coordinates require 34–101 seconds for one cold `solve()` call on the
-test machine. Increasing `--sizes` therefore scales this case quickly and should
-be done separately from routine smoke benchmarks.
+All three nonlinear solvers converge to costs within `0.002%` of one another.
+This case confirms that both iteration count and per-iteration derivative cost
+matter when biomechanical dynamics make exact Hessian and constraint-Jacobian
+evaluations expensive.
