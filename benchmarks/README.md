@@ -35,6 +35,17 @@ Unavailable solvers and runtime failures are written to the result files instead
 of aborting the remaining matrix. For ACADOS installed outside its default
 location, pass `--acados-dir /path/to/acados`.
 
+Run a larger multiple-shooting stress case with 500 pendulum intervals:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases pendulum \
+  --solvers ipopt madnlp \
+  --sizes 500 \
+  --warmups 1 \
+  --repetitions 1
+```
+
 Run the long holonomic stress case separately:
 
 ```bash
@@ -64,6 +75,7 @@ and does not reuse the previous solution.
 | Case | Shooting | IPOPT cold (s) | IPOPT hot (s) | MadNLP cold (s) | MadNLP hot (s) | Hot comparison |
 |---|---:|---:|---:|---:|---:|---|
 | Pendulum | 20 | 0.805 | 0.686 | 7.960 | **0.396** | MadNLP 42% faster |
+| Pendulum | 500 | **18.266** | **18.945** | 27.239 | 23.292 | IPOPT 19% faster |
 | Cube | 10 | 0.178 | 0.211 | 8.521 | **0.018** | MadNLP about 12x faster |
 | Static arm | 10 | **20.364** | 31.497 | 27.483 | **23.320** | MadNLP 26% faster hot |
 | Free time | 10 | **0.680** | **0.759** | failure | failure | IPOPT only successful solver |
@@ -76,6 +88,9 @@ initialized on the first solve. Once hot, MadNLP is competitive or faster on
 most successful cases. The free-time failure remains a robustness gap. Each
 column currently contains one paired observation, so small differences—especially
 the 2% contact and holonomic gaps—should be confirmed with repeated measurements.
+On the 500-interval pendulum, both solvers converge to cost `35.664490` with a
+maximum constraint violation below `1.86e-9`; IPOPT remains faster both cold and
+hot, while MadNLP reduces its startup-inclusive time by 3.95 seconds once hot.
 
 | Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
 |---|---:|---|---:|---:|---:|---:|---:|
