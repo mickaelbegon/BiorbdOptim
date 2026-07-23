@@ -61,7 +61,7 @@ cmake \
   -DMATH_LIBRARY_BACKEND=Casadi \
   -DMODULE_KALMAN=OFF \
   -DMODULE_STATIC_OPTIM=OFF \
-  -DMODULE_VTP_FILES_READER=OFF \
+  -DMODULE_VTP_FILES_READER=ON \
   -DPYTHON_EXECUTABLE="$(command -v python)" \
   -DPython3_EXECUTABLE="$(command -v python)" \
   -DPython3_SITELIB_INSTALL="$python_site_packages"

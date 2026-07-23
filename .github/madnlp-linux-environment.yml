@@ -11,3 +11,4 @@ dependencies:
   - pip
   - pytest
   - swig =4.3.1
+  - tinyxml2
