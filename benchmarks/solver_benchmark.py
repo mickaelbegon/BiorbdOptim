@@ -23,12 +23,15 @@ import casadi as cas
 import numpy as np
 
 import bioptim
-from bioptim import OrderingStrategy, Solver
+from bioptim import ObjectiveFcn, ObjectiveList, OrderingStrategy, Solver
 from bioptim.examples.getting_started.basic_ocp import prepare_ocp as prepare_pendulum
+from bioptim.examples.toy_examples.acados.cube import prepare_ocp as prepare_cube
+from bioptim.examples.toy_examples.acados.static_arm import prepare_ocp as prepare_static_arm
 from bioptim.examples.utils import ExampleUtils
 
 
 SOLVER_NAMES = ("ipopt", "fatrop", "acados", "madnlp")
+CASE_NAMES = ("pendulum", "cube", "static_arm")
 
 
 @dataclass
@@ -85,15 +88,50 @@ def make_solver(name: str, tolerance: float, max_iterations: int, acados_dir: st
 
 
 def prepare_case(case: str, n_shooting: int):
-    if case != "pendulum":
-        raise ValueError(f"Unknown benchmark case: {case}")
-    return prepare_pendulum(
-        ExampleUtils.folder + "/models/pendulum.bioMod",
-        final_time=1.0,
-        n_shooting=n_shooting,
-        n_threads=1,
-        ordering_strategy=OrderingStrategy.TIME_MAJOR,
-    )
+    common = {"n_shooting": n_shooting, "ordering_strategy": OrderingStrategy.TIME_MAJOR}
+    if case == "pendulum":
+        return prepare_pendulum(
+            ExampleUtils.folder + "/models/pendulum.bioMod",
+            final_time=1.0,
+            n_threads=1,
+            **common,
+        )
+    if case == "cube":
+        ocp = prepare_cube(
+            ExampleUtils.folder + "/models/cube.bioMod",
+            tf=2.0,
+            use_sx=True,
+            **common,
+        )
+        objectives = ObjectiveList()
+        objectives.add(
+            ObjectiveFcn.Mayer.MINIMIZE_STATE,
+            key="q",
+            weight=1000,
+            index=[0, 1],
+            target=np.array([[1.0, 2.0]]).T,
+            multi_thread=False,
+        )
+        objectives.add(
+            ObjectiveFcn.Mayer.MINIMIZE_STATE,
+            key="q",
+            weight=10000,
+            index=[2],
+            target=np.array([[3.0]]),
+            multi_thread=False,
+        )
+        objectives.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=1, multi_thread=False)
+        ocp.update_objectives(objectives)
+        return ocp
+    if case == "static_arm":
+        return prepare_static_arm(
+            ExampleUtils.folder + "/models/arm26.bioMod",
+            final_time=1.0,
+            use_sx=True,
+            n_threads=1,
+            **common,
+        )
+    raise ValueError(f"Unknown benchmark case: {case}")
 
 
 def optional_float(value) -> float | None:
@@ -208,7 +246,7 @@ def write_results(output: Path, metadata: dict, rows: list[RunResult]) -> tuple[
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--case", choices=("pendulum",), default="pendulum")
+    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(CASE_NAMES))
     parser.add_argument("--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES))
     parser.add_argument("--sizes", nargs="+", type=int, default=[20, 50, 100])
     parser.add_argument("--repetitions", type=int, default=3)
@@ -233,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         "platform": platform.platform(),
         "bioptim": bioptim.__version__,
         "casadi": cas.__version__,
-        "case": args.case,
+        "cases": args.cases,
         "sizes": args.sizes,
         "repetitions": args.repetitions,
         "warmups": args.warmups,
@@ -241,47 +279,48 @@ def main(argv: list[str] | None = None) -> int:
         "max_iterations": args.max_iterations,
     }
     rows: list[RunResult] = []
-    for solver_name in args.solvers:
-        available, reason = solver_available(solver_name)
-        for n_shooting in args.sizes:
-            if not available:
-                rows.append(
-                    RunResult(
-                        case=args.case,
-                        solver=solver_name,
-                        n_shooting=n_shooting,
-                        repetition=0,
-                        outcome="unavailable",
-                        error=reason,
+    for case in args.cases:
+        for solver_name in args.solvers:
+            available, reason = solver_available(solver_name)
+            for n_shooting in args.sizes:
+                if not available:
+                    rows.append(
+                        RunResult(
+                            case=case,
+                            solver=solver_name,
+                            n_shooting=n_shooting,
+                            repetition=0,
+                            outcome="unavailable",
+                            error=reason,
+                        )
                     )
-                )
-                continue
-            for warmup in range(args.warmups):
-                warmup_result = run_once(
-                    args.case,
-                    solver_name,
-                    n_shooting,
-                    -(warmup + 1),
-                    args.tolerance,
-                    args.max_iterations,
-                    args.acados_dir,
-                )
-                if warmup_result.outcome != "success":
-                    rows.append(warmup_result)
-                    break
-            else:
-                rows.extend(
-                    run_once(
-                        args.case,
+                    continue
+                for warmup in range(args.warmups):
+                    warmup_result = run_once(
+                        case,
                         solver_name,
                         n_shooting,
-                        repetition,
+                        -(warmup + 1),
                         args.tolerance,
                         args.max_iterations,
                         args.acados_dir,
                     )
-                    for repetition in range(1, args.repetitions + 1)
-                )
+                    if warmup_result.outcome != "success":
+                        rows.append(warmup_result)
+                        break
+                else:
+                    rows.extend(
+                        run_once(
+                            case,
+                            solver_name,
+                            n_shooting,
+                            repetition,
+                            args.tolerance,
+                            args.max_iterations,
+                            args.acados_dir,
+                        )
+                        for repetition in range(1, args.repetitions + 1)
+                    )
 
     json_path, csv_path = write_results(output, metadata, rows)
     print(json.dumps(summarize(rows), indent=2))
