@@ -1,6 +1,6 @@
 # Solver benchmarks
 
-The solver benchmark runs seven Bioptim problems with IPOPT, FATROP, ACADOS, and
+The solver benchmark runs eight Bioptim problems with IPOPT, FATROP, ACADOS, and
 MadNLP:
 
 - `pendulum`: torque-driven swing-up with endpoint constraints;
@@ -11,10 +11,12 @@ MadNLP:
 - `contact_inequality`: jump with unilateral contact and non-slipping inequalities;
 - `holonomic_muscle`: muscle-driven arm/pendulum swing-up with dependent
   coordinates, an iterative holonomic reconstruction, and direct collocation.
+- `muscle_fatigue`: muscle-driven reaching with Xia fatigue states, residual
+  torques, direct collocation, and an exact Hessian.
 
 It records OCP construction time, wall-clock solve time, solver time, iterations,
-cost, status, constraint violation, and whether each run is cold or hot in JSON
-and CSV files.
+cost, status, constraint violation, objective/constraint derivative evaluation
+times, and whether each run is cold or hot in JSON and CSV files.
 
 Run a small comparison from the repository root:
 
@@ -57,6 +59,17 @@ python -m benchmarks.solver_benchmark \
   --repetitions 1
 ```
 
+Run the Hessian-heavy muscle-fatigue benchmark separately:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases muscle_fatigue \
+  --solvers ipopt madnlp \
+  --sizes 50 \
+  --warmups 1 \
+  --repetitions 1
+```
+
 ## Preliminary results
 
 The following smoke benchmark was run on macOS on 2026-07-22. Each cell is one
@@ -82,6 +95,7 @@ and does not reuse the previous solution.
 | Multiphase | 10/phase | 0.298 | 0.341 | 33846.126974 | 7.024 | **0.275** | 33846.126974 | Yes | MadNLP 19% faster |
 | Contact inequalities | 10 | 4.566 | 4.180 | 0.151329095 | 9.287 | **4.089** | 0.151329095 | Yes | MadNLP 2% faster |
 | Holonomic muscle | 5 | **22.065** | **20.013** | 0.013516468 | 26.888 | 20.360 | 0.013516468 | Yes | IPOPT 2% faster hot |
+| Muscle fatigue | 50 | **8.109** | 9.231 | 17.288825 | 12.914 | **6.621** | 17.288821 | Yes | MadNLP 28% faster hot |
 
 MadNLP's cold penalty is 4–8 seconds on the smaller cases because Julia is
 initialized on the first solve. Once hot, MadNLP is competitive or faster on
@@ -95,6 +109,26 @@ Except for the 20-interval pendulum, all problems solved by both solvers have a
 relative cost difference below `4.2e-5%`. The 20-interval pendulum is therefore
 a speed comparison between distinct local solutions, not an equivalent-solution
 comparison.
+
+### Hessian-heavy biomechanics case
+
+The `muscle_fatigue` case uses 50 direct-collocation intervals, six muscle
+actuators with Xia fatigue states, residual joint torques, and exact second
+derivatives. The derivative timings below are CasADi's cumulative hot-run
+measurements inside the nonlinear solver.
+
+| Solver | Hot `solve()` (s) | Hot solver (s) | Iterations | Solver time/iteration (ms) | Hessian (s) | Constraint Jacobian (s) | Cost |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| IPOPT | 9.231 | 8.385 | 67 | 125.2 | 3.549 | 3.098 | 17.288825 |
+| MadNLP | **6.621** | **5.614** | **62** | **90.6** | **2.549** | **2.061** | 17.288821 |
+
+MadNLP's hot solver time is 33% lower. Its iteration count is only 7.5% lower,
+whereas its measured time per iteration is 27.6% lower. The result therefore
+shows that iteration count alone does not explain performance when biomechanical
+dynamics make exact Hessian and constraint-Jacobian evaluations expensive.
+Hessian and Jacobian evaluation together account for 79% of IPOPT's hot solver
+time and 82% of MadNLP's. The two solutions have a relative cost difference of
+`1.99e-5%`.
 
 | Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
 |---|---:|---|---:|---:|---:|---:|---:|

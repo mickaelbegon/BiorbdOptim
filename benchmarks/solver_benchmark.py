@@ -28,6 +28,7 @@ from bioptim.examples.getting_started.example_inequality_constraint import prepa
 from bioptim.examples.getting_started.basic_ocp import prepare_ocp as prepare_pendulum
 from bioptim.examples.toy_examples.acados.cube import prepare_ocp as prepare_cube
 from bioptim.examples.toy_examples.acados.static_arm import prepare_ocp as prepare_static_arm
+from bioptim.examples.toy_examples.fatigue.static_arm_with_fatigue import prepare_ocp as prepare_fatigue_arm
 from bioptim.examples.toy_examples.holonomic_constraints.arm26_pendulum_swingup_muscle import (
     prepare_ocp as prepare_holonomic_muscle,
 )
@@ -47,8 +48,9 @@ CASE_NAMES = (
     "multiphase",
     "contact_inequality",
     "holonomic_muscle",
+    "muscle_fatigue",
 )
-DEFAULT_CASE_NAMES = CASE_NAMES[:-1]
+DEFAULT_CASE_NAMES = CASE_NAMES[:-2]
 
 
 @dataclass
@@ -62,6 +64,11 @@ class RunResult:
     build_s: float | None = None
     solve_wall_s: float | None = None
     solver_s: float | None = None
+    objective_eval_s: float | None = None
+    constraint_eval_s: float | None = None
+    objective_gradient_s: float | None = None
+    hessian_eval_s: float | None = None
+    constraint_jacobian_s: float | None = None
     iterations: int | None = None
     status: int | None = None
     cost: float | None = None
@@ -185,6 +192,16 @@ def prepare_case(case: str, n_shooting: int):
             ordering_strategy=OrderingStrategy.TIME_MAJOR,
         )
         return ocp
+    if case == "muscle_fatigue":
+        return prepare_fatigue_arm(
+            ExampleUtils.folder + "/models/arm26_constant.bioMod",
+            final_time=0.8,
+            n_shooting=n_shooting,
+            fatigue_type="xia",
+            torque_level=1,
+            n_threads=1,
+            expand_dynamics=True,
+        )
     raise ValueError(f"Unknown benchmark case: {case}")
 
 
@@ -214,6 +231,8 @@ def run_once(
         start = time.perf_counter()
         solution = ocp.solve(solver)
         solve_wall_s = time.perf_counter() - start
+        nlpsol = getattr(ocp.ocp_solver, "shaked_ocp_solver", None)
+        solver_stats = nlpsol.stats() if nlpsol is not None else {}
         constraints = solution.constraints
         max_violation = None
         if constraints is not None:
@@ -243,6 +262,11 @@ def run_once(
             build_s=build_s,
             solve_wall_s=solve_wall_s,
             solver_s=optional_float(solution.solver_time_to_optimize),
+            objective_eval_s=optional_float(solver_stats.get("t_wall_nlp_f")),
+            constraint_eval_s=optional_float(solver_stats.get("t_wall_nlp_g")),
+            objective_gradient_s=optional_float(solver_stats.get("t_wall_nlp_grad_f")),
+            hessian_eval_s=optional_float(solver_stats.get("t_wall_nlp_hess_l")),
+            constraint_jacobian_s=optional_float(solver_stats.get("t_wall_nlp_jac_g")),
             iterations=solution.iterations,
             status=solution.status,
             cost=optional_float(solution.cost),
@@ -267,6 +291,15 @@ def median_or_none(rows: list[RunResult], field: str) -> float | None:
     return statistics.median(values) if values else None
 
 
+def median_ratio_or_none(rows: list[RunResult], numerator: str, denominator: str) -> float | None:
+    values = [
+        getattr(row, numerator) / getattr(row, denominator)
+        for row in rows
+        if getattr(row, numerator) is not None and getattr(row, denominator) not in (None, 0)
+    ]
+    return statistics.median(values) if values else None
+
+
 def summarize(rows: list[RunResult]) -> list[dict]:
     groups: dict[tuple[str, str, int], list[RunResult]] = {}
     for row in rows:
@@ -288,6 +321,14 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                 "hot_solve_wall_s": median_or_none(hot, "solve_wall_s"),
                 "cold_solver_s": median_or_none(cold, "solver_s"),
                 "hot_solver_s": median_or_none(hot, "solver_s"),
+                "cold_iterations": median_or_none(cold, "iterations"),
+                "hot_iterations": median_or_none(hot, "iterations"),
+                "cold_solver_s_per_iteration": median_ratio_or_none(cold, "solver_s", "iterations"),
+                "hot_solver_s_per_iteration": median_ratio_or_none(hot, "solver_s", "iterations"),
+                "cold_hessian_eval_s": median_or_none(cold, "hessian_eval_s"),
+                "hot_hessian_eval_s": median_or_none(hot, "hessian_eval_s"),
+                "cold_constraint_jacobian_s": median_or_none(cold, "constraint_jacobian_s"),
+                "hot_constraint_jacobian_s": median_or_none(hot, "constraint_jacobian_s"),
                 "median_build_s": median_or_none(successful, "build_s"),
                 "median_solve_wall_s": median_or_none(successful, "solve_wall_s"),
                 "median_solver_s": median_or_none(successful, "solver_s"),
