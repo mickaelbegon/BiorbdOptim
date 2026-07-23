@@ -53,7 +53,8 @@ def test_madnlp_solves_bioptim_pendulum_ocp():
     solution = ocp.solve(solver)
 
     assert solution.status == 0
-    assert float(solution.cost) == pytest.approx(68.046875234144, rel=1e-6)
+    # MadNLP's converged local solution varies by a few ppm across supported platforms.
+    assert float(solution.cost) == pytest.approx(68.046875234144, rel=1e-5)
     assert np.max(np.abs(np.asarray(solution.constraints))) <= 1e-8
     assert solution.iterations > 0
     assert solution.inf_pr <= 1e-8
