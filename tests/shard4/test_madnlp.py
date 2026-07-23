@@ -7,7 +7,8 @@ if not getattr(cas, "has_nlpsol", lambda _: False)("madnlp"):
     pytest.skip("CasADi MadNLP plugin is not available", allow_module_level=True)
 
 from bioptim import Solver
-from bioptim.examples.getting_started.pendulum import prepare_ocp
+from bioptim.examples.getting_started.basic_ocp import prepare_ocp
+from bioptim.examples.utils import ExampleUtils
 
 
 def test_madnlp_casadi_plugin_and_warm_start_inputs():
@@ -38,7 +39,7 @@ def test_madnlp_casadi_plugin_and_warm_start_inputs():
 
 def test_madnlp_solves_bioptim_pendulum_ocp():
     ocp = prepare_ocp(
-        "bioptim/examples/getting_started/models/pendulum.bioMod",
+        ExampleUtils.folder + "/models/pendulum.bioMod",
         final_time=1,
         n_shooting=20,
         n_threads=1,

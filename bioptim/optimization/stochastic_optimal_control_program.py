@@ -1,5 +1,5 @@
 import numpy as np
-from casadi import DM_eye, vertcat, Function, horzcat
+from casadi import DM, vertcat, Function, horzcat
 
 from .non_linear_program import NonLinearProgram as NLP
 from .optimization_vector import OptimizationVectorHelper
@@ -482,7 +482,7 @@ class StochasticOptimalControlProgram(OptimalControlProgram):
             Gdw: Function,
             initial_covariance: NpArray,
         ) -> NpArray:
-            sigma_w_dm = vertcat(nlp.model.motor_noise_magnitude, nlp.model.sensory_noise_magnitude) * DM_eye(
+            sigma_w_dm = vertcat(nlp.model.motor_noise_magnitude, nlp.model.sensory_noise_magnitude) * DM.eye(
                 vertcat(nlp.model.motor_noise_magnitude, nlp.model.sensory_noise_magnitude).shape[0]
             )
 

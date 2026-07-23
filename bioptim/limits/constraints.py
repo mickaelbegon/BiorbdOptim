@@ -1,7 +1,7 @@
 from typing import Callable, Any
 
 import numpy as np
-from casadi import sum1, if_else, vertcat, lt, SX, MX, jacobian, Function, MX_eye, SX_eye, horzcat, ldl, diag
+from casadi import sum1, if_else, vertcat, lt, SX, MX, jacobian, Function, horzcat, ldl, diag
 
 from .path_conditions import Bounds
 from .penalty import PenaltyFunctionAbstract, PenaltyOption, PenaltyController
@@ -434,7 +434,7 @@ class ConstraintFunction(PenaltyFunctionAbstract):
                 controller.algebraic_states["m"].cx_start, controller.model.matrix_shape_m
             )
 
-            CX_eye = SX_eye if controller.ocp.cx == SX else MX_eye
+            CX_eye = SX.eye if controller.ocp.cx == SX else MX.eye
             sigma_w = vertcat(
                 controller.model.sensory_noise_magnitude, controller.model.motor_noise_magnitude
             ) * CX_eye(
@@ -535,7 +535,7 @@ class ConstraintFunction(PenaltyFunctionAbstract):
                 controller.numerical_timeseries.cx,
             )
 
-            CX_eye = SX_eye if controller.ocp.cx == SX else MX_eye
+            CX_eye = SX.eye if controller.ocp.cx == SX else MX.eye
             out = a_matrix - (CX_eye(DF_DX.shape[0]) - DF_DX * dt / 2)
 
             out_vector = StochasticBioModel.reshape_to_vector(out)
