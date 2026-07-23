@@ -1,6 +1,6 @@
 from typing import Callable, Any
 
-from casadi import MX_eye, SX_eye, jacobian, Function, MX, SX, vertcat
+from casadi import jacobian, Function, MX, SX, vertcat
 
 from .constraints import PenaltyOption
 from .objective_functions import ObjectiveFunction
@@ -477,7 +477,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 controllers[1].numerical_timeseries.cx,
             )
 
-            CX_eye = SX_eye if controllers[0].cx == SX else MX_eye
+            CX_eye = SX.eye if controllers[0].cx == SX else MX.eye
             DG_DZ = CX_eye(DdZ_DX.shape[0]) - DdZ_DX * dt / 2
 
             val = M_matrix @ DG_DZ - CX_eye(M_matrix.shape[0])
@@ -522,7 +522,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 controllers[1].controls["a"].cx, controllers[1].model.matrix_shape_a
             )
 
-            CX_eye = SX_eye if controllers[0].cx == SX else MX_eye
+            CX_eye = SX.eye if controllers[0].cx == SX else MX.eye
             DG_DZ = CX_eye(a_plus_matrix.shape[0]) - a_plus_matrix * dt / 2
 
             val = m_matrix @ DG_DZ - CX_eye(2 * nu)
@@ -573,7 +573,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
                 controllers[0].algebraic_states["m"].cx, controllers[0].model.matrix_shape_m
             )
 
-            CX_eye = SX_eye if controllers[0].ocp.cx == SX else MX_eye
+            CX_eye = SX.eye if controllers[0].ocp.cx == SX else MX.eye
             sigma_w = vertcat(
                 controllers[0].model.sensory_noise_magnitude, controllers[0].model.motor_noise_magnitude
             ) * CX_eye(controllers[0].model.n_noise)

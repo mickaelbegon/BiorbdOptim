@@ -2,7 +2,7 @@
 
 Run from the repository root, for example::
 
-    python -m benchmarks.solver_benchmark --solvers ipopt fatrop madnlp --sizes 20 50
+    python -m benchmarks.solver_benchmark --solvers ipopt fatrop alpaqa --sizes 20 50
 """
 
 from __future__ import annotations
@@ -24,21 +24,26 @@ import numpy as np
 
 import bioptim
 from bioptim import ObjectiveFcn, ObjectiveList, OrderingStrategy, Solver
-from bioptim.examples.getting_started.example_inequality_constraint import prepare_ocp as prepare_contact_inequality
+from bioptim.examples.getting_started.example_inequality_constraint import (
+    prepare_ocp as prepare_contact_inequality,
+)
 from bioptim.examples.getting_started.basic_ocp import prepare_ocp as prepare_pendulum
 from bioptim.examples.toy_examples.acados.cube import prepare_ocp as prepare_cube
-from bioptim.examples.toy_examples.acados.static_arm import prepare_ocp as prepare_static_arm
+from bioptim.examples.toy_examples.acados.static_arm import (
+    prepare_ocp as prepare_static_arm,
+)
 from bioptim.examples.toy_examples.holonomic_constraints.arm26_pendulum_swingup_muscle import (
     prepare_ocp as prepare_holonomic_muscle,
 )
 from bioptim.examples.toy_examples.optimal_time_ocp.multiphase_time_constraint import (
     prepare_ocp as prepare_multiphase,
 )
-from bioptim.examples.toy_examples.optimal_time_ocp.time_constraint import prepare_ocp as prepare_free_time
+from bioptim.examples.toy_examples.optimal_time_ocp.time_constraint import (
+    prepare_ocp as prepare_free_time,
+)
 from bioptim.examples.utils import ExampleUtils
 
-
-SOLVER_NAMES = ("ipopt", "fatrop", "acados", "madnlp")
+SOLVER_NAMES = ("ipopt", "fatrop", "acados", "alpaqa")
 CASE_NAMES = (
     "pendulum",
     "cube",
@@ -67,6 +72,10 @@ class RunResult:
     max_constraint_violation: float | None = None
     inf_pr: float | None = None
     inf_du: float | None = None
+    native_status: str | None = None
+    objective_evaluations: int | None = None
+    constraint_evaluations: int | None = None
+    augmented_lagrangian_evaluations: int | None = None
     error: str | None = None
 
 
@@ -75,37 +84,49 @@ def nlpsol_available(name: str) -> tuple[bool, str | None]:
         available = bool(cas.has_nlpsol(name))
     except (RuntimeError, AttributeError) as error:
         return False, str(error)
-    return available, None if available else f"CasADi nlpsol plugin '{name}' is unavailable"
+    return available, (
+        None if available else f"CasADi nlpsol plugin '{name}' is unavailable"
+    )
 
 
 def solver_available(name: str) -> tuple[bool, str | None]:
-    if name in ("ipopt", "fatrop", "madnlp"):
+    if name in ("ipopt", "fatrop", "alpaqa"):
         return nlpsol_available(name)
     if name == "acados":
         available = importlib.util.find_spec("acados_template") is not None
-        return available, None if available else "Python package 'acados_template' is unavailable"
+        return available, (
+            None if available else "Python package 'acados_template' is unavailable"
+        )
     raise ValueError(f"Unknown solver: {name}")
 
 
-def make_solver(name: str, tolerance: float, max_iterations: int, acados_dir: str | None):
+def make_solver(
+    name: str, tolerance: float, max_iterations: int, acados_dir: str | None
+):
     factories = {
         "ipopt": Solver.IPOPT,
         "fatrop": Solver.FATROP,
-        "madnlp": Solver.MADNLP,
+        "alpaqa": Solver.ALPAQA,
         "acados": Solver.ACADOS,
     }
     solver = factories[name]()
     solver.set_convergence_tolerance(tolerance)
     solver.set_constraint_tolerance(tolerance)
     solver.set_maximum_iterations(max_iterations)
-    solver.set_print_level("ERROR" if name == "madnlp" else 0)
+    solver.set_print_level(0)
+    if name == "alpaqa":
+        solver.set_alm_maximum_iterations(max_iterations)
+        solver.set_lbfgs_memory(20)
     if name == "acados" and acados_dir:
         solver.set_acados_dir(acados_dir)
     return solver
 
 
 def prepare_case(case: str, n_shooting: int):
-    common = {"n_shooting": n_shooting, "ordering_strategy": OrderingStrategy.TIME_MAJOR}
+    common = {
+        "n_shooting": n_shooting,
+        "ordering_strategy": OrderingStrategy.TIME_MAJOR,
+    }
     if case == "pendulum":
         return prepare_pendulum(
             ExampleUtils.folder + "/models/pendulum.bioMod",
@@ -137,7 +158,12 @@ def prepare_case(case: str, n_shooting: int):
             target=np.array([[3.0]]),
             multi_thread=False,
         )
-        objectives.add(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau", weight=1, multi_thread=False)
+        objectives.add(
+            ObjectiveFcn.Lagrange.MINIMIZE_CONTROL,
+            key="tau",
+            weight=1,
+            multi_thread=False,
+        )
         ocp.update_objectives(objectives)
         return ocp
     if case == "static_arm":
@@ -191,7 +217,10 @@ def optional_float(value) -> float | None:
     if value is None:
         return None
     array = np.asarray(value, dtype=float)
-    return float(array.squeeze()) if array.size == 1 else None
+    if array.size != 1:
+        return None
+    scalar = float(array.squeeze())
+    return scalar if np.isfinite(scalar) else None
 
 
 def run_once(
@@ -212,6 +241,7 @@ def run_once(
         start = time.perf_counter()
         solution = ocp.solve(solver)
         solve_wall_s = time.perf_counter() - start
+        solver_stats = ocp.ocp_solver.out["sol"].get("solver_stats", {})
         constraints = solution.constraints
         max_violation = None
         if constraints is not None:
@@ -220,9 +250,14 @@ def run_once(
             upper_bounds = np.asarray(ocp.ocp_solver.limits["ubg"], dtype=float)
             lower_violation = np.maximum(lower_bounds - constraint_array, 0.0)
             upper_violation = np.maximum(constraint_array - upper_bounds, 0.0)
-            max_violation = (
-                float(np.max(np.maximum(lower_violation, upper_violation))) if constraint_array.size else 0.0
-            )
+            if not np.all(np.isfinite(constraint_array)):
+                max_violation = None
+            else:
+                max_violation = (
+                    float(np.max(np.maximum(lower_violation, upper_violation)))
+                    if constraint_array.size
+                    else 0.0
+                )
 
         if solution.status != 0:
             outcome = "solver_failure"
@@ -246,8 +281,14 @@ def run_once(
             max_constraint_violation=max_violation,
             inf_pr=optional_float(solution.inf_pr),
             inf_du=optional_float(solution.inf_du),
+            native_status=ocp.ocp_solver.out["sol"].get("native_status"),
+            objective_evaluations=solver_stats.get("n_call_nlp_f"),
+            constraint_evaluations=solver_stats.get("n_call_nlp_g"),
+            augmented_lagrangian_evaluations=solver_stats.get("n_call_nlp_psi"),
         )
-    except Exception as error:  # A benchmark must report one solver failure without aborting the matrix.
+    except (
+        Exception
+    ) as error:  # A benchmark must report one solver failure without aborting the matrix.
         return RunResult(
             case=case,
             solver=solver_name,
@@ -289,7 +330,9 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                         for row in successful
                         if row.max_constraint_violation is not None
                     )
-                    if any(row.max_constraint_violation is not None for row in successful)
+                    if any(
+                        row.max_constraint_violation is not None for row in successful
+                    )
                     else None
                 ),
             }
@@ -297,12 +340,20 @@ def summarize(rows: list[RunResult]) -> list[dict]:
     return summary
 
 
-def write_results(output: Path, metadata: dict, rows: list[RunResult]) -> tuple[Path, Path]:
+def write_results(
+    output: Path, metadata: dict, rows: list[RunResult]
+) -> tuple[Path, Path]:
     output.parent.mkdir(parents=True, exist_ok=True)
     json_path = output.with_suffix(".json")
     csv_path = output.with_suffix(".csv")
-    payload = {"metadata": metadata, "summary": summarize(rows), "runs": [asdict(row) for row in rows]}
-    json_path.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
+    payload = {
+        "metadata": metadata,
+        "summary": summarize(rows),
+        "runs": [asdict(row) for row in rows],
+    }
+    json_path.write_text(
+        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=list(asdict(rows[0]).keys()))
         writer.writeheader()
@@ -312,8 +363,12 @@ def write_results(output: Path, metadata: dict, rows: list[RunResult]) -> tuple[
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(DEFAULT_CASE_NAMES))
-    parser.add_argument("--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES))
+    parser.add_argument(
+        "--cases", nargs="+", choices=CASE_NAMES, default=list(DEFAULT_CASE_NAMES)
+    )
+    parser.add_argument(
+        "--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES)
+    )
     parser.add_argument("--sizes", nargs="+", type=int, default=[20, 50, 100])
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=1)
@@ -327,7 +382,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.repetitions < 1 or args.warmups < 0 or any(size < 1 for size in args.sizes):
-        raise ValueError("repetitions and sizes must be positive; warmups must be non-negative")
+        raise ValueError(
+            "repetitions and sizes must be positive; warmups must be non-negative"
+        )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or Path("benchmarks/results") / f"solver_benchmark_{timestamp}"

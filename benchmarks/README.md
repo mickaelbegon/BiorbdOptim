@@ -1,7 +1,7 @@
 # Solver benchmarks
 
 The solver benchmark runs seven Bioptim problems with IPOPT, FATROP, ACADOS, and
-MadNLP:
+alpaqa:
 
 - `pendulum`: torque-driven swing-up with endpoint constraints;
 - `cube`: torque-driven marker-target motion with Mayer and Lagrange costs;
@@ -13,14 +13,17 @@ MadNLP:
   coordinates, an iterative holonomic reconstruction, and direct collocation.
 
 It records OCP construction time, wall-clock solve time, solver time, iterations,
-cost, status, and constraint violation in JSON and CSV files.
+cost, status, constraint violation, the native alpaqa status, and available
+CasADi function-evaluation counters in JSON and CSV files. CasADi's alpaqa
+plugin does not expose ALM/PANOC iteration counts, so that field is empty for
+alpaqa.
 
 Run a small comparison from the repository root:
 
 ```bash
 python -m benchmarks.solver_benchmark \
   --cases pendulum cube static_arm free_time multiphase contact_inequality \
-  --solvers ipopt fatrop madnlp \
+  --solvers ipopt fatrop alpaqa \
   --sizes 20 50 \
   --warmups 1 \
   --repetitions 3
@@ -39,60 +42,35 @@ Run the long holonomic stress case separately:
 ```bash
 python -m benchmarks.solver_benchmark \
   --cases holonomic_muscle \
-  --solvers ipopt fatrop madnlp \
+  --solvers ipopt fatrop alpaqa \
   --sizes 5 \
   --warmups 0 \
   --repetitions 1
 ```
 
-## Preliminary results
+## Interpreting results
 
-The following smoke benchmark was run on macOS on 2026-07-22. Each cell is one
-cold execution without a warm-up, with a tolerance of `1e-6` and at most 200
-iterations. These measurements validate the benchmark and solver integrations;
-use multiple warm-ups and repetitions for performance conclusions.
+Alpaqa uses the same initial guess as the other solvers. Some benchmark cases
+were originally tuned for interior-point methods and may return
+`SOLVER_RET_NAN` from a poor initial guess. Such runs are recorded as solver
+failures and must not be included in timing medians.
 
-| Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
-|---|---:|---|---:|---:|---:|---:|---:|
-| Pendulum | 20 | IPOPT | 0.790 | 0.340 | 24 | 91.835622 | 6.96e-13 |
-| Pendulum | 20 | FATROP | 0.426 | 0.053 | 28 | 79.609055 | 2.31e-14 |
-| Pendulum | 20 | MadNLP | 6.715 | 3.808 | 24 | 68.046875 | 3.85e-13 |
-| Cube | 10 | IPOPT | 0.249 | 0.198 | 13 | 1117.997079 | 1.33e-15 |
-| Cube | 10 | FATROP | 0.070 | 0.002 | 15 | 1117.997079 | 1.78e-15 |
-| Cube | 10 | MadNLP | 11.340 | 7.570 | 11 | 1117.997245 | 7.55e-15 |
-| Static arm | 10 | IPOPT | 38.415 | 13.304 | 69 | 330.979798 | 9.67e-10 |
-| Static arm | 10 | FATROP | 31.133 | 9.649 | 75 | 382.661494 | 8.86e-10 |
-| Static arm | 10 | MadNLP | 32.367 | 11.342 | 67 | 330.979936 | 2.24e-08 |
-| Free time | 10 | IPOPT | 1.248 | 1.118 | 54 | 220.463496 | 9.96e-09 |
-| Multiphase | 10/phase | IPOPT | 0.423 | 0.191 | 11 | 33846.126974 | 4.88e-15 |
-| Multiphase | 10/phase | MadNLP | 0.256 | 0.067 | 10 | 33846.126974 | 4.88e-15 |
-| Contact inequalities | 10 | IPOPT | 4.273 | 3.929 | 57 | 0.151329 | 1.27e-10 |
-| Contact inequalities | 10 | FATROP | 7.596 | 7.171 | 114 | 0.151329 | 4.49e-14 |
-| Contact inequalities | 10 | MadNLP | 4.304 | 3.905 | 71 | 0.151329 | 2.72e-12 |
-| Holonomic muscle | 5 | IPOPT | 34.192 | 31.606 | 27 | 0.01351647 | 7.15e-07 |
-| Holonomic muscle | 5 | FATROP | 62.248 | 59.536 | 29 | 0.01351661 | 5.38e-07 |
-| Holonomic muscle | 5 | MadNLP | 101.477 | 70.904 | 26 | 0.01351647 | 7.15e-07 |
+A one-shot smoke run on macOS with CasADi 3.8.0, five shooting intervals,
+`1e-6` tolerances and at most 200 ALM/PANOC iterations produced:
 
-ACADOS was unavailable in the tested environments. IPOPT and FATROP used CasADi
-3.7.2; MadNLP used the CasADi 3.8.0 MadNLP build. MadNLP's cold times include
-Julia startup. The different costs on the pendulum and static-arm cases indicate
-different local optima from the same initial guess, so speed must be interpreted
-together with objective value and feasibility.
+| Case | Outcome | Build (s) | `solve()` (s) | Solver (s) | Cost | Max. violation | ψ evaluations |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Cube | success | 0.143 | 0.141 | 0.089 | 1117.237760 | 6.08e-7 | 2181 |
+| Pendulum | limited/failure | 0.248 | 0.773 | 0.394 | 4.344239 | non-finite | 143 |
 
-The same smoke run also records unsupported or failing combinations:
-
-| Case | Solver | Outcome |
-|---|---|---|
-| Free time | FATROP | CasADi FATROP structure detection rejects the NLP layout |
-| Free time | MadNLP | line search evaluates a constraint at NaN and aborts |
-| Multiphase | FATROP | CasADi FATROP structure detection rejects the NLP layout |
+These cold, single-run figures validate the benchmark but are insufficient for
+performance conclusions. The pendulum's zero initial trajectory is particularly
+poor for PANOC and generates non-finite dynamics evaluations.
 
 Constraint violation is computed against each constraint's lower and upper
 bounds, rather than as `max(abs(g))`; this is essential for time, contact, and
 other inequality constraints whose feasible values are not zero.
 
-The holonomic-muscle case is the long stress benchmark. Even at only five
-shooting intervals, its collocation formulation and implicit reconstruction of
-dependent coordinates require 34–101 seconds for one cold `solve()` call on the
-test machine. Increasing `--sizes` therefore scales this case quickly and should
-be done separately from routine smoke benchmarks.
+The holonomic-muscle case is the long stress benchmark. Its collocation
+formulation and implicit reconstruction of dependent coordinates are expensive,
+so it should be run separately from routine smoke benchmarks.
