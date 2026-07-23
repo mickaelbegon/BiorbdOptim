@@ -1,30 +1,50 @@
+import json
+import pickle
+from multiprocessing.reduction import ForkingPickler
+
 from bioptim.gui.online_callback_server import _serialize_xydata, _deserialize_xydata
+from bioptim.gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from bioptim.gui.plot import PlotOcp
 from bioptim.gui.online_callback_server import _ResponseHeader
+from bioptim.gui.serializable_class import OcpSerializable
 from bioptim.optimization.optimization_vector import OptimizationVectorHelper
 from casadi import DM
+from matplotlib import pyplot as plt
 import numpy as np
 
 from ..utils import TestUtils
 
 
-def test_serialize_deserialize():
-    # Prepare a set of data to serialize and deserialize
+def _prepare_ocp():
     from bioptim.examples.getting_started import basic_ocp as ocp_module
 
     bioptim_folder = TestUtils.bioptim_folder()
 
-    ocp = ocp_module.prepare_ocp(
+    return ocp_module.prepare_ocp(
         biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
         final_time=1,
         n_shooting=40,
     )
 
-    dummy_phase_times = OptimizationVectorHelper.extract_step_times(ocp, DM(np.ones(ocp.n_phases)))
-    plotter = PlotOcp(ocp, dummy_phase_times=dummy_phase_times, show_bounds=True, only_initialize_variables=True)
+
+def test_serialize_deserialize():
+    # Prepare a set of data to serialize and deserialize
+    ocp = _prepare_ocp()
+
+    dummy_phase_times = OptimizationVectorHelper.extract_step_times(
+        ocp, DM(np.ones(ocp.n_phases))
+    )
+    plotter = PlotOcp(
+        ocp,
+        dummy_phase_times=dummy_phase_times,
+        show_bounds=True,
+        only_initialize_variables=True,
+    )
 
     np.random.seed(42)
-    xdata, ydata = plotter.parse_data(**{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]})
+    xdata, ydata = plotter.parse_data(
+        **{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]}
+    )
 
     # Serialize and deserialize the data
     serialized_data = _serialize_xydata(xdata, ydata)
@@ -39,8 +59,35 @@ def test_serialize_deserialize():
         if isinstance(y_variable, np.ndarray):
             assert np.allclose(y_variable, deserialized_y_variable[0], equal_nan=True)
         else:
-            for y_phase, deserialized_y_phase in zip(y_variable, deserialized_y_variable):
+            for y_phase, deserialized_y_phase in zip(
+                y_variable, deserialized_y_variable
+            ):
                 assert np.allclose(y_phase, deserialized_y_phase)
+
+
+def test_multiprocess_plotter_is_picklable_without_the_full_ocp():
+    ocp = _prepare_ocp()
+    dummy_phase_times = OptimizationVectorHelper.extract_step_times(
+        ocp, DM(np.ones(ocp.n_phases))
+    )
+    serialized_dummy_phase_times = [
+        [np.array(node_times)[:, 0].tolist() for node_times in phase_times]
+        for phase_times in dummy_phase_times
+    ]
+    serialized_ocp = json.dumps(OcpSerializable.from_ocp(ocp).serialize()).encode()
+
+    process_plotter = OnlineCallbackMultiprocess.ProcessPlotter(
+        serialized_ocp, serialized_dummy_phase_times
+    )
+    process_plotter = pickle.loads(ForkingPickler.dumps(process_plotter))
+
+    assert process_plotter._serialized_ocp == serialized_ocp
+    assert not hasattr(process_plotter, "_ocp")
+
+    process_plotter._initialize_plotter({"automatically_organize": False})
+    assert isinstance(process_plotter._plotter.ocp, OcpSerializable)
+    assert len(process_plotter._plotter.all_figures) > 0
+    plt.close("all")
 
 
 def test_response_header():
