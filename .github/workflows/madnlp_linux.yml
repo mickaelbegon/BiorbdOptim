@@ -78,6 +78,9 @@ jobs:
 
       - name: Verify solver plugins
         run: |
+          casadi_directory="$(python -c 'import casadi, pathlib; print(pathlib.Path(casadi.__file__).parent)')"
+          ldd "$casadi_directory/libcasadi_nlpsol_madnlp.so" || true
+          ldd "$GITHUB_WORKSPACE/.cache/madnlp/foo/lib/libmadnlp_c.so" || true
           python - <<'PY'
           import casadi as cas
 
@@ -85,6 +88,11 @@ jobs:
           for name in ("ipopt", "fatrop", "madnlp"):
               available = cas.has_nlpsol(name)
               print(f"{name}: {available}")
+              if not available:
+                  try:
+                      cas.nlpsol_options(name)
+                  except RuntimeError as error:
+                      print(error)
               assert available, f"CasADi plugin {name!r} is unavailable"
           PY
 
