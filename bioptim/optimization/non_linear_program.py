@@ -177,8 +177,15 @@ class NonLinearProgram:
         self.x_bounds: BoundsList = BoundsList()
         self.x_init: InitialGuessList = InitialGuessList()
         self.X_scaled: AnyListOptional = None
+        self.X_decision_scaled = None
         self.x_scaling: AnyDictOptional = None
         self.X: AnyListOptional = None
+        self.X_decision = None
+        self.block_shooting = None
+        self.block_boundaries = None
+        self.block_end_states_scaled = []
+        self.block_end_states = []
+        self.state_rollout_function = None
         self.a_bounds: BoundsList = BoundsList()
         self.a_init: InitialGuessList = InitialGuessList()
         self.A: AnyListOptional = None
@@ -361,9 +368,104 @@ class NonLinearProgram:
         if self.control_type not in ControlType:
             raise NotImplementedError(f"Multiple shooting problem not implemented yet for {self.control_type}")
 
-        self._declare_states_shooting_points()
+        if self.block_shooting is None:
+            self._declare_states_shooting_points()
+            self._declare_controls_shooting_points()
+            self._declare_algebraic_states_shooting_points()
+            self.X_decision_scaled = self.X_scaled
+            self.X_decision = self.X
+            return
+
+        self._validate_block_shooting_support()
+        self.block_boundaries = self.block_shooting.compute_boundaries(self.ns)
         self._declare_controls_shooting_points()
         self._declare_algebraic_states_shooting_points()
+        self._declare_block_states_shooting_points()
+
+    def _validate_block_shooting_support(self) -> None:
+        from ..dynamics.rk_base import RK
+
+        if self.cx is SX or not isinstance(self.dynamics_type.ode_solver, RK):
+            raise NotImplementedError(
+                "Block shooting currently supports explicit Runge-Kutta integrators with MX graphs only."
+            )
+        if self.is_stochastic:
+            raise NotImplementedError("Block shooting is not implemented for stochastic optimal control programs.")
+        if self.algebraic_states.shape:
+            raise NotImplementedError("Block shooting is not implemented for non-empty algebraic states.")
+
+    def _declare_block_states_shooting_points(self) -> None:
+        state_scaling = np.concatenate([self.x_scaling[key].scaling for key in self.states.keys()])
+        decision_state_nodes = self.decision_state_nodes
+        self.X_decision_scaled = {}
+        self.X_decision = {}
+
+        for block_index, node in enumerate(decision_state_nodes):
+            self.set_node_index(node)
+            state_scaled = self.cx.sym(f"X_block_scaled_{self.phase_idx}_{block_index}", self.states.scaled.shape, 1)
+            self.X_decision_scaled[node] = state_scaled
+            self.X_decision[node] = state_scaled * state_scaling
+
+        self.X_scaled = [None] * (self.ns + 1)
+        self.X = [None] * (self.ns + 1)
+        self.block_end_states_scaled = []
+        self.block_end_states = []
+
+        for block_index, start in enumerate(decision_state_nodes):
+            stop = self.block_boundaries[block_index + 1]
+            state_scaled = self.X_decision_scaled[start]
+            self.X_scaled[start] = state_scaled
+            self.X[start] = self.X_decision[start]
+
+            for node in range(start, stop):
+                state_scaled = self._integrate_block_interval(node, state_scaled)
+                if node + 1 < stop:
+                    self.X_scaled[node + 1] = state_scaled
+                    self.X[node + 1] = state_scaled * state_scaling
+
+            block_end_state = state_scaled * state_scaling
+            self.block_end_states_scaled.append(state_scaled)
+            self.block_end_states.append(block_end_state)
+
+            if stop == self.ns:
+                self.X_scaled[stop] = state_scaled
+                self.X[stop] = block_end_state
+            else:
+                self.X_scaled[stop] = self.X_decision_scaled[stop]
+                self.X[stop] = self.X_decision[stop]
+
+        self.set_node_index(0)
+
+    def _integrate_block_interval(self, node: int, state_scaled):
+        self.set_node_index(node)
+        if self.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+            controls = self.U_scaled[node]
+        elif self.control_type == ControlType.LINEAR_CONTINUOUS:
+            controls = casadi.horzcat(self.U_scaled[node], self.U_scaled[node + 1])
+        elif self.control_type == ControlType.NONE:
+            controls = self.cx()
+        else:
+            raise NotImplementedError(f"The control type {self.control_type} is not implemented for block shooting.")
+
+        return self.dynamics[node](
+            t_span=vertcat(self.node_time(node), self.dt),
+            x0=state_scaled,
+            u=controls,
+            p=self.parameters.scaled.cx_start,
+            a=self.cx(),
+            d=self._numerical_timeseries_at(node),
+        )["xf"]
+
+    def _numerical_timeseries_at(self, node: int):
+        """Return the fixed numerical data associated with one shooting interval."""
+        if self.numerical_data_timeseries is None:
+            return self.cx()
+
+        values = []
+        for array in self.numerical_data_timeseries.values():
+            for component in range(array.shape[1]):
+                values.append(casadi.DM(array[:, component, node]))
+        return vertcat(*values)
 
     def _declare_states_shooting_points(self) -> None:
         p = self.phase_idx
@@ -429,6 +531,13 @@ class NonLinearProgram:
         The number of states
         """
         return self.ns + 1
+
+    @property
+    def decision_state_nodes(self) -> tuple[int, ...]:
+        if self.block_shooting is None:
+            return tuple(range(self.ns + 1))
+        boundaries = self.block_boundaries or self.block_shooting.compute_boundaries(self.ns)
+        return boundaries[:-1]
 
     def n_states_decision_steps(self, node_idx) -> Int:
         """

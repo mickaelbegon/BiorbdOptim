@@ -46,13 +46,10 @@ def _keys_variable_major(ocp) -> Iterator[KeySize]:
                 "algebraic_states": nlp.n_algebraic_states_decision_steps,
             }
 
-            for node in range(nlp.ns):
+            nodes = nlp.decision_state_nodes if var == "states" else range(nlp.ns)
+            for node in nodes:
                 attr = getattr(nlp, var)
                 yield (p, var, node), _len_of(attr.shape), method_map[var](node)
-
-            if var == "states":
-                # last node for states is the final state
-                yield (p, var, nlp.ns), _len_of(attr.shape), method_map["states"](nlp.ns)
 
             if var == "algebraic_states":
                 nlp.algebraic_states.node_index = nlp.ns
@@ -85,14 +82,16 @@ def _keys_time_major(ocp) -> Iterator[KeySize]:
     """
     for p, nlp in enumerate(ocp.nlp):
         for node in range(nlp.ns):
-            yield (p, "states", node), _len_of(nlp.states.shape), nlp.n_states_decision_steps(node)
+            if node in nlp.decision_state_nodes:
+                yield (p, "states", node), _len_of(nlp.states.shape), nlp.n_states_decision_steps(node)
             yield (p, "controls", node), _len_of(nlp.controls.shape), 1
 
             nlp.algebraic_states.node_index = node
             n_cols = nlp.n_algebraic_states_decision_steps(node)
             yield (p, "algebraic_states", node), _len_of(nlp.algebraic_states.shape), n_cols
 
-        yield (p, "states", nlp.ns), _len_of(nlp.states.shape), nlp.n_states_decision_steps(nlp.ns)
+        if nlp.ns in nlp.decision_state_nodes:
+            yield (p, "states", nlp.ns), _len_of(nlp.states.shape), nlp.n_states_decision_steps(nlp.ns)
 
         if nlp.control_type in (ControlType.LINEAR_CONTINUOUS, ControlType.CONSTANT_WITH_LAST_NODE):
             yield (p, "controls", nlp.ns), _len_of(nlp.controls.shape), 1
@@ -185,8 +184,13 @@ class VectorLayout:
             phase_controls = []
             phase_algebraics = []
 
-            for node in range(nlp.n_states_nodes):
-                phase_states.append(unstacked[(p, "states", node)])
+            if nlp.block_shooting is None:
+                for node in range(nlp.n_states_nodes):
+                    phase_states.append(unstacked[(p, "states", node)])
+            else:
+                full_states = nlp.state_rollout_function(vec)
+                for node in range(nlp.n_states_nodes):
+                    phase_states.append(full_states[:, node].toarray())
             for node in range(nlp.n_controls_nodes):
                 phase_controls.append(unstacked[(p, "controls", node)])
             for node in range(nlp.n_states_nodes):

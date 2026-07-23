@@ -1219,6 +1219,7 @@ class PenaltyFunctionAbstract:
             if controller.control_type in (
                 ControlType.CONSTANT,
                 ControlType.CONSTANT_WITH_LAST_NODE,
+                ControlType.NONE,
             ):
                 u = controller.controls.cx_start
             elif controller.control_type == ControlType.LINEAR_CONTINUOUS:
@@ -1268,6 +1269,12 @@ class PenaltyFunctionAbstract:
             penalty.multi_thread = True
 
             return continuity
+
+        @staticmethod
+        def block_state_continuity(penalty: PenaltyOption, controller: PenaltyController):
+            """Continuity of the final interval of a block with the next independent block state."""
+
+            return PenaltyFunctionAbstract.Functions.state_continuity(penalty, controller)
 
         @staticmethod
         def first_collocation_point_equals_state(penalty: PenaltyOption, controller: PenaltyController):

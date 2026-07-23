@@ -840,6 +840,7 @@ class ConstraintFcn(FcnEnum):
 
     BOUND_CONTROL = (ConstraintFunction.Functions.bound_control,)
     BOUND_STATE = (ConstraintFunction.Functions.bound_state,)
+    BLOCK_STATE_CONTINUITY = (PenaltyFunctionAbstract.Functions.block_state_continuity,)
     STATE_CONTINUITY = (PenaltyFunctionAbstract.Functions.state_continuity,)
     FIRST_COLLOCATION_HELPER_EQUALS_STATE = (PenaltyFunctionAbstract.Functions.first_collocation_point_equals_state,)
     CUSTOM = (PenaltyFunctionAbstract.Functions.custom,)

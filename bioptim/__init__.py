@@ -236,6 +236,7 @@ from .dynamics.state_space_dynamics import (
 )
 from .dynamics.state_space_dynamics import StateDynamics, StateDynamicsWithContacts
 from .optimization.multi_start import MultiStart
+from .optimization.block_shooting import BlockShooting, compute_block_boundaries
 from .optimization.non_linear_program import NonLinearProgram
 from .optimization.optimal_control_program import OptimalControlProgram
 from .optimization.optimization_variable import OptimizationVariableList

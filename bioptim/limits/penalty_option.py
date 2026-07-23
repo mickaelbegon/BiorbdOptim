@@ -773,6 +773,8 @@ class PenaltyOption(OptionGeneric):
         def vertcat_cx_end():
             if nlp.control_type in (ControlType.LINEAR_CONTINUOUS,):
                 return vertcat(u, controls.scaled.cx_end)
+            elif nlp.control_type == ControlType.NONE:
+                return u
             elif nlp.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
                 if n_idx < nlp.n_controls_nodes - 1:
                     return vertcat(u, controls.scaled.cx_end)

@@ -195,7 +195,7 @@ class Integrator:
         The control at a given time
         """
 
-        if self.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+        if self.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE, ControlType.NONE):
             return u
         elif self.control_type == ControlType.LINEAR_CONTINUOUS:
             dt_norm = (t - self.t_span_sym[0]) / self.t_span_sym[1]

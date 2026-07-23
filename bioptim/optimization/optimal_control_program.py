@@ -8,6 +8,7 @@ from casadi import MX, SX, sum1, horzcat
 from matplotlib import pyplot as plt
 
 from .non_linear_program import NonLinearProgram as NLP
+from .block_shooting import BlockShooting, normalize_block_shooting
 from .optimization_vector import OptimizationVectorHelper
 from .vector_layout import VectorLayout, OrderingStrategy
 from ..dynamics.configure_problem import DynamicsOptionsList, DynamicsOptions, ConfigureProblem
@@ -188,6 +189,7 @@ class OptimalControlProgram:
         a_scaling: VariableScalingList | None = None,
         n_threads: Int = 1,
         ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
+        block_shooting: BlockShooting | list[BlockShooting] | tuple[BlockShooting, ...] | None = None,
         use_sx: Bool = False,
         integrated_value_functions: dict[Str, Callable] | None = None,
     ) -> None:
@@ -247,6 +249,8 @@ class OptimalControlProgram:
             The transition types between the phases
         n_threads: int
             The number of thread to use while solving (multi-threading if > 1)
+        block_shooting: BlockShooting | list[BlockShooting] | tuple[BlockShooting, ...] | None
+            Optional state-condensing block configuration. If omitted, the historical DMS transcription is used.
         use_sx: bool
             The nature of the casadi variables. MX are used if False.
         """
@@ -258,6 +262,7 @@ class OptimalControlProgram:
         self._check_and_set_threads(n_threads)
         self._check_and_set_shooting_points(n_shooting)
         self._check_and_set_phase_time(phase_time)
+        self.block_shooting = normalize_block_shooting(block_shooting, self.n_shooting, self.n_phases)
 
         (
             x_bounds,
@@ -534,6 +539,14 @@ class OptimalControlProgram:
         if not isinstance(dynamics, DynamicsOptionsList):
             raise ValueError("dynamics must be of type DynamicsOptionsList or DynamicsOptions")
 
+        if any(configuration is not None for configuration in self.block_shooting):
+            from ..dynamics.rk_base import RK
+
+            if use_sx or any(not isinstance(dynamics[phase].ode_solver, RK) for phase in range(self.n_phases)):
+                raise NotImplementedError(
+                    "Block shooting currently supports explicit Runge-Kutta integrators with MX graphs only."
+                )
+
         # Type of CasADi graph
         self.cx = SX if use_sx else MX
 
@@ -550,6 +563,7 @@ class OptimalControlProgram:
 
         # Define some aliases
         NLP.add(self, "ns", self.n_shooting, False)
+        NLP.add(self, "block_shooting", self.block_shooting, False)
         for nlp in self.nlp:
             if nlp.ns < 1:
                 raise RuntimeError("Number of shooting points must be at least 1")
@@ -648,6 +662,38 @@ class OptimalControlProgram:
         self.update_initial_guess(x_init, u_init, parameter_init, a_init)
         # Define the actual NLP problem
         OptimizationVectorHelper.declare_ocp_shooting_points(self)
+        self._declare_block_state_bounds_as_constraints()
+
+    def _declare_block_state_bounds_as_constraints(self) -> None:
+        """Preserve bounds at state nodes that are eliminated by block shooting."""
+        for nlp in self.nlp:
+            if nlp.block_shooting is None:
+                continue
+
+            decision_nodes = set(nlp.decision_state_nodes)
+            eliminated_nodes = [node for node in range(nlp.ns + 1) if node not in decision_nodes]
+
+            for key in nlp.x_bounds.real_keys():
+                state_bounds = nlp.x_bounds[key]
+                state_bounds.check_and_adjust_dimensions(nlp.states[key].cx.shape[0], nlp.ns)
+
+                for node in eliminated_nodes:
+                    min_bound = np.asarray(state_bounds.min.evaluate_at(node, repeat=1)).reshape(-1)
+                    max_bound = np.asarray(state_bounds.max.evaluate_at(node, repeat=1)).reshape(-1)
+                    finite_rows = np.flatnonzero(np.isfinite(min_bound) | np.isfinite(max_bound))
+                    if not finite_rows.size:
+                        continue
+
+                    penalty = Constraint(
+                        ConstraintFcn.BOUND_STATE,
+                        node=node,
+                        key=key,
+                        rows=finite_rows.tolist(),
+                        min_bound=min_bound,
+                        max_bound=max_bound,
+                        penalty_type=PenaltyType.INTERNAL,
+                    )
+                    penalty.add_or_replace_to_penalty_pool(self, nlp)
 
     def _declare_multi_node_penalties(
         self,
@@ -760,6 +806,16 @@ class OptimalControlProgram:
 
     def _prepare_vector_layout(self, ordering_strategy: OrderingStrategy | None) -> None:
         self.vector_layout = VectorLayout(self, ordering=ordering_strategy)
+        variables_vector = self.variables_vector
+        for nlp in self.nlp:
+            if nlp.block_shooting is not None:
+                nlp.state_rollout_function = casadi.Function(
+                    f"state_rollout_phase_{nlp.phase_idx}",
+                    [variables_vector],
+                    [casadi.horzcat(*nlp.X_scaled)],
+                    ["variables"],
+                    ["states"],
+                )
 
     @property
     def variables_vector(self) -> CX:
@@ -871,6 +927,18 @@ class OptimalControlProgram:
     def _declare_inner_phase_continuity(self, nlp: NLP) -> None:
         """Declare the continuity function for the state variables in a phase"""
         if nlp.dynamics_type.skip_continuity:
+            return
+
+        if nlp.block_shooting is not None:
+            if not isinstance(nlp.dynamics_type.state_continuity_weight, ConstraintWeight):
+                raise NotImplementedError("Block shooting continuity as an objective is not implemented.")
+            for boundary in nlp.block_boundaries[1:-1]:
+                penalty = Constraint(
+                    ConstraintFcn.BLOCK_STATE_CONTINUITY,
+                    node=boundary - 1,
+                    penalty_type=PenaltyType.INTERNAL,
+                )
+                penalty.add_or_replace_to_penalty_pool(self, nlp)
             return
 
         if isinstance(nlp.dynamics_type.state_continuity_weight, ConstraintWeight):
@@ -1516,7 +1584,8 @@ class OptimalControlProgram:
 
         self.update_initial_guess(x_init=x_init_guess, u_init=u_init_guess, parameter_init=param_init_guess)
 
-        if self.ocp_solver:
+        uses_block_shooting = any(nlp.block_shooting is not None for nlp in self.nlp)
+        if self.ocp_solver and (not uses_block_shooting or sol.ocp is self):
             self.ocp_solver.set_lagrange_multiplier(sol)
 
         self._is_warm_starting = True
@@ -1755,7 +1824,7 @@ class OptimalControlProgram:
     def get_decision_variables(self):
         """Get the decision variables of the OCP"""
         time = self.dt_parameter.cx
-        states = [nlp.X_scaled for nlp in self.nlp]
+        states = [nlp.X_decision_scaled for nlp in self.nlp]
         controls = [nlp.U_scaled for nlp in self.nlp]
         algebraic_states = [nlp.A_scaled for nlp in self.nlp]
         parameters = self.parameters.scaled.cx
