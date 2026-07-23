@@ -1,14 +1,16 @@
 # Solver benchmarks
 
-The solver benchmark runs six Bioptim problems with IPOPT, FATROP, ACADOS, and
+The solver benchmark runs seven Bioptim problems with IPOPT, FATROP, ACADOS, and
 MadNLP:
 
 - `pendulum`: torque-driven swing-up with endpoint constraints;
 - `cube`: torque-driven marker-target motion with Mayer and Lagrange costs;
-- `static_arm`: muscle-driven reaching with residual torques.
+- `static_arm`: muscle-driven reaching with residual torques;
 - `free_time`: pendulum swing-up with optimized final time;
 - `multiphase`: three linked cube motions with one free time per phase;
-- `contact_inequality`: jump with unilateral contact and non-slipping inequalities.
+- `contact_inequality`: jump with unilateral contact and non-slipping inequalities;
+- `holonomic_muscle`: muscle-driven arm/pendulum swing-up with dependent
+  coordinates, an iterative holonomic reconstruction, and direct collocation.
 
 It records OCP construction time, wall-clock solve time, solver time, iterations,
 cost, status, and constraint violation in JSON and CSV files.
@@ -31,6 +33,17 @@ the compared solvers receive the same variable ordering.
 Unavailable solvers and runtime failures are written to the result files instead
 of aborting the remaining matrix. For ACADOS installed outside its default
 location, pass `--acados-dir /path/to/acados`.
+
+Run the long holonomic stress case separately:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases holonomic_muscle \
+  --solvers ipopt fatrop madnlp \
+  --sizes 5 \
+  --warmups 0 \
+  --repetitions 1
+```
 
 ## Preliminary results
 
@@ -56,6 +69,9 @@ use multiple warm-ups and repetitions for performance conclusions.
 | Contact inequalities | 10 | IPOPT | 4.273 | 3.929 | 57 | 0.151329 | 1.27e-10 |
 | Contact inequalities | 10 | FATROP | 7.596 | 7.171 | 114 | 0.151329 | 4.49e-14 |
 | Contact inequalities | 10 | MadNLP | 4.304 | 3.905 | 71 | 0.151329 | 2.72e-12 |
+| Holonomic muscle | 5 | IPOPT | 34.192 | 31.606 | 27 | 0.01351647 | 7.15e-07 |
+| Holonomic muscle | 5 | FATROP | 62.248 | 59.536 | 29 | 0.01351661 | 5.38e-07 |
+| Holonomic muscle | 5 | MadNLP | 101.477 | 70.904 | 26 | 0.01351647 | 7.15e-07 |
 
 ACADOS was unavailable in the tested environments. IPOPT and FATROP used CasADi
 3.7.2; MadNLP used the CasADi 3.8.0 MadNLP build. MadNLP's cold times include
@@ -74,3 +90,9 @@ The same smoke run also records unsupported or failing combinations:
 Constraint violation is computed against each constraint's lower and upper
 bounds, rather than as `max(abs(g))`; this is essential for time, contact, and
 other inequality constraints whose feasible values are not zero.
+
+The holonomic-muscle case is the long stress benchmark. Even at only five
+shooting intervals, its collocation formulation and implicit reconstruction of
+dependent coordinates require 34–101 seconds for one cold `solve()` call on the
+test machine. Increasing `--sizes` therefore scales this case quickly and should
+be done separately from routine smoke benchmarks.
