@@ -678,7 +678,9 @@ from bioptim import ClassName
 
 ## The OCP
 An optimal control program is an optimization that uses control variables to drive some state variables.
-`Bioptim` includes two types of transcription methods: the `direct collocation` and the `direct multiple shooting`.
+`Bioptim` includes direct collocation, historical direct multiple shooting, and an explicit
+[block-shooting transcription](./docs/block_shooting.md) that ranges from direct single shooting to partially
+condensed multiple shooting.
 To summarize, it defines a large optimization problem by discretizing the control and the state variables into a predetermined number of intervals, the beginning of the interval being the shooting points.
 By defining strict continuity/collocation constraints, it can ensure proper dynamics of the system (i.e. state continuity).
 The OCP are the solved using gradient descending algorithms until a local minimum is found.
@@ -712,6 +714,7 @@ OptimalControlProgram(
     plot_mappings: Mapping,
     phase_transitions: PhaseTransitionList,
     n_threads: int,
+    block_shooting: BlockShooting,
     use_sx: bool,
 )
 ```
@@ -740,6 +743,7 @@ This one applies the same mapping to the generalized coordinates (*q*), velociti
 `plot_mappings` is to force some plots to be linked together.  
 `n_threads` is to solve the optimization using multiple threads. 
 This number is the number of threads to use.  
+`block_shooting` optionally condenses states inside explicit RK integration blocks; omitting it preserves historical DMS.
 `use_sx` is if the CasADi graph should be constructed in SX. 
 SX will tend to solve much faster than MX graphs, however they necessitate a huge amount of RAM.
 
