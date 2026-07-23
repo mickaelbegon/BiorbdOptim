@@ -108,7 +108,7 @@ jobs:
           python -m benchmarks.solver_benchmark \
             --cases pendulum \
             --solvers ipopt fatrop madnlp \
-            --sizes 5 \
+            --sizes 20 \
             --warmups 0 \
             --repetitions 1 \
             --output /tmp/madnlp-linux-smoke
