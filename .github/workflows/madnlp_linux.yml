@@ -73,7 +73,8 @@ jobs:
 
       - name: Install CasADi wheel and Bioptim
         run: |
-          python -m pip install --ignore-installed --no-deps "casadi==$CASADI_VERSION"
+          conda remove --force --yes casadi
+          python -m pip install --no-deps "casadi==$CASADI_VERSION"
           python -m pip install --no-deps -e .
 
       - name: Verify solver plugins
@@ -163,7 +164,8 @@ jobs:
 
       - name: Install CasADi wheel and Bioptim
         run: |
-          python -m pip install --ignore-installed --no-deps "casadi==$CASADI_VERSION"
+          conda remove --force --yes casadi
+          python -m pip install --no-deps "casadi==$CASADI_VERSION"
           python -m pip install --no-deps -e .
 
       - name: Install ACADOS
