@@ -520,9 +520,7 @@ def test_n100_block_graph_has_theoretical_nlp_dimensions(n_blocks):
     assert ocp.variables_vector.numel() == 1 + n_blocks * nlp.states.shape + 100 * nlp.controls.shape
     assert len(block_continuities) == n_blocks - 1
     continuity_size = sum(
-        penalty.function[node].size_out("val")[0]
-        for penalty in block_continuities
-        for node in penalty.node_idx
+        penalty.function[node].size_out("val")[0] for penalty in block_continuities for node in penalty.node_idx
     )
     assert continuity_size == (n_blocks - 1) * nlp.states.shape
 
@@ -598,6 +596,80 @@ def test_infinite_rows_do_not_create_constraints_on_eliminated_states():
     assert all(penalty.rows.tolist() == [1] for penalty in bound_constraints)
 
 
+def test_update_bounds_rebuilds_constraints_on_eliminated_states_without_touching_continuity():
+    ocp = _prepare_block_ocp(skip_continuity=False)
+    nlp = ocp.nlp[0]
+    continuity_constraints = [
+        penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BLOCK_STATE_CONTINUITY
+    ]
+    assert len(continuity_constraints) == 1
+
+    finite_bounds = BoundsList()
+    finite_bounds.add(
+        "q",
+        min_bound=[-2.0, -3.0],
+        max_bound=[2.0, 3.0],
+        interpolation=InterpolationType.CONSTANT,
+    )
+    ocp.update_bounds(x_bounds=finite_bounds)
+
+    bound_constraints = [penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BOUND_STATE]
+    assert [penalty.node_idx for penalty in bound_constraints] == [[1], [2], [4], [5], [6]]
+    assert all(penalty.rows.tolist() == [0, 1] for penalty in bound_constraints)
+    assert [
+        penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BLOCK_STATE_CONTINUITY
+    ] == continuity_constraints
+
+    partially_infinite_bounds = BoundsList()
+    partially_infinite_bounds.add(
+        "q",
+        min_bound=[-np.inf, -4.0],
+        max_bound=[np.inf, 4.0],
+        interpolation=InterpolationType.CONSTANT,
+    )
+    ocp.update_bounds(x_bounds=partially_infinite_bounds)
+
+    bound_constraints = [penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BOUND_STATE]
+    assert len(bound_constraints) == 5
+    assert all(penalty.rows.tolist() == [1] for penalty in bound_constraints)
+    assert all(float(penalty.bounds.min[0, 0]) == -4.0 for penalty in bound_constraints)
+    assert all(float(penalty.bounds.max[0, 0]) == 4.0 for penalty in bound_constraints)
+
+    unbounded = BoundsList()
+    unbounded.add(
+        "q",
+        min_bound=[-np.inf, -np.inf],
+        max_bound=[np.inf, np.inf],
+        interpolation=InterpolationType.CONSTANT,
+    )
+    ocp.update_bounds(x_bounds=unbounded)
+
+    assert not [penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BOUND_STATE]
+    assert [
+        penalty for penalty in nlp.g_internal if penalty and penalty.type == ConstraintFcn.BLOCK_STATE_CONTINUITY
+    ] == continuity_constraints
+
+
+def test_update_bounds_updates_block_start_variable_bounds():
+    ocp = _prepare_block_ocp()
+    x_bounds = BoundsList()
+    x_bounds.add(
+        "q",
+        min_bound=[-5.0, -6.0],
+        max_bound=[5.0, 6.0],
+        interpolation=InterpolationType.CONSTANT,
+    )
+
+    ocp.update_bounds(x_bounds=x_bounds)
+    minimum, maximum = ocp.bounds_vectors
+    unstacked_minimum = ocp.vector_layout.unstack(minimum)
+    unstacked_maximum = ocp.vector_layout.unstack(maximum)
+
+    for node in ocp.nlp[0].decision_state_nodes:
+        np.testing.assert_allclose(unstacked_minimum[(0, "states", node)][:2], [[-5.0], [-6.0]])
+        np.testing.assert_allclose(unstacked_maximum[(0, "states", node)][:2], [[5.0], [6.0]])
+
+
 def test_state_bounds_vector_only_contains_independent_block_starts():
     minimum = np.vstack((np.arange(7), np.arange(10, 17)))
     maximum = minimum + 100
@@ -656,6 +728,94 @@ def test_solution_reconstruction_respects_nontrivial_state_scaling():
     np.testing.assert_allclose(unscaled["qdot"], scaled["qdot"] * np.array([[4.0], [5.0]]))
     np.testing.assert_allclose(unscaled["q"][:, 0], values[:, 0])
     np.testing.assert_allclose(unscaled["q"][:, 3], values[:, 3])
+
+
+@pytest.mark.parametrize("ordering", [OrderingStrategy.VARIABLE_MAJOR, OrderingStrategy.TIME_MAJOR])
+def test_solution_from_initial_guess_uses_compact_block_layout_and_scaling(ordering):
+    x_scaling = VariableScalingList()
+    x_scaling.add("q", scaling=[2.0, 4.0])
+    x_scaling.add("qdot", scaling=[5.0, 10.0])
+    ocp = _prepare_block_ocp(ordering_strategy=ordering, x_scaling=x_scaling)
+
+    q_values = np.vstack((np.arange(1.0, 8.0), np.arange(11.0, 18.0)))
+    qdot_values = np.vstack((np.arange(21.0, 28.0), np.arange(31.0, 38.0)))
+    tau_values = np.vstack((np.arange(41.0, 47.0), np.arange(51.0, 57.0)))
+    states = InitialGuessList()
+    states.add("q", q_values, interpolation=InterpolationType.EACH_FRAME)
+    states.add("qdot", qdot_values, interpolation=InterpolationType.EACH_FRAME)
+    controls = InitialGuessList()
+    controls.add("tau", tau_values, interpolation=InterpolationType.EACH_FRAME)
+
+    solution = Solution.from_initial_guess(
+        ocp,
+        [
+            np.array([1.0 / ocp.nlp[0].ns]),
+            states,
+            controls,
+            InitialGuessList(),
+            InitialGuessList(),
+        ],
+    )
+
+    assert solution.vector.shape == (ocp.vector_layout.total_size, 1)
+    unstacked = ocp.vector_layout.unstack(solution.vector)
+    assert set(key for key in unstacked if len(key) == 3 and key[1] == "states") == {
+        (0, "states", 0),
+        (0, "states", 3),
+    }
+    for node in ocp.nlp[0].decision_state_nodes:
+        expected_scaled_state = np.vstack(
+            (
+                q_values[:, node : node + 1] / np.array([[2.0], [4.0]]),
+                qdot_values[:, node : node + 1] / np.array([[5.0], [10.0]]),
+            )
+        )
+        np.testing.assert_allclose(unstacked[(0, "states", node)], expected_scaled_state)
+
+    reconstructed = solution.decision_states(scaled=False, to_merge=SolutionMerge.NODES)
+    for node in ocp.nlp[0].decision_state_nodes:
+        np.testing.assert_allclose(reconstructed["q"][:, node], q_values[:, node])
+        np.testing.assert_allclose(reconstructed["qdot"][:, node], qdot_values[:, node])
+    np.testing.assert_allclose(
+        solution.decision_controls(scaled=False, to_merge=SolutionMerge.NODES)["tau"],
+        tau_values,
+    )
+
+
+def test_solution_from_initial_guess_honors_time_major_layout_for_dms():
+    ocp = _prepare_block_ocp(block_shooting=None, ordering_strategy=OrderingStrategy.TIME_MAJOR)
+    q_values = np.vstack((np.arange(7.0), np.arange(10.0, 17.0)))
+    qdot_values = np.vstack((np.arange(20.0, 27.0), np.arange(30.0, 37.0)))
+    tau_values = np.vstack((np.arange(40.0, 46.0), np.arange(50.0, 56.0)))
+    states = InitialGuessList()
+    states.add("q", q_values, interpolation=InterpolationType.EACH_FRAME)
+    states.add("qdot", qdot_values, interpolation=InterpolationType.EACH_FRAME)
+    controls = InitialGuessList()
+    controls.add("tau", tau_values, interpolation=InterpolationType.EACH_FRAME)
+
+    solution = Solution.from_initial_guess(
+        ocp,
+        [
+            np.array([1.0 / ocp.nlp[0].ns]),
+            states,
+            controls,
+            InitialGuessList(),
+            InitialGuessList(),
+        ],
+    )
+
+    np.testing.assert_allclose(
+        solution.decision_states(to_merge=SolutionMerge.NODES)["q"],
+        q_values,
+    )
+    np.testing.assert_allclose(
+        solution.decision_states(to_merge=SolutionMerge.NODES)["qdot"],
+        qdot_values,
+    )
+    np.testing.assert_allclose(
+        solution.decision_controls(to_merge=SolutionMerge.NODES)["tau"],
+        tau_values,
+    )
 
 
 @pytest.mark.parametrize(

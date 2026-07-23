@@ -255,6 +255,18 @@ def test_vector_layout_collocation(duplicate_starting_point):
     v_init_expected = np.load(FILE_LOCATION + f"/v_init_collocation{file_suffix}.npy", allow_pickle=False)
     np.testing.assert_almost_equal(v_init, v_init_expected)
 
+    solution_from_initial_guess = Solution.from_initial_guess(
+        ocp,
+        [
+            ocp.dt_parameter_initial_guess.init,
+            ocp.nlp[0].x_init,
+            ocp.nlp[0].u_init,
+            ocp.parameter_init,
+            ocp.nlp[0].a_init,
+        ],
+    )
+    np.testing.assert_almost_equal(solution_from_initial_guess.vector, v_init_expected)
+
 
 def test_vector_layout_linear_continuous():
     from bioptim.examples.getting_started import basic_ocp as ocp_module
@@ -485,6 +497,18 @@ def test_parameters():
     v_init_expected = np.load(FILE_LOCATION + "/v_init_parameters.npy", allow_pickle=False)
     np.testing.assert_almost_equal(v_init, v_init_expected)
 
+    solution_from_initial_guess = Solution.from_initial_guess(
+        ocp,
+        [
+            ocp.dt_parameter_initial_guess.init,
+            ocp.nlp[0].x_init,
+            ocp.nlp[0].u_init,
+            ocp.parameter_init,
+            ocp.nlp[0].a_init,
+        ],
+    )
+    np.testing.assert_almost_equal(solution_from_initial_guess.vector, v_init_expected)
+
 
 def test_vector_layout_multiple_phases():
     from bioptim.examples.getting_started import example_multiphase as ocp_module
@@ -590,3 +614,15 @@ def test_vector_layout_algebraic_states():
     v_init = OptimizationVectorHelper.init_vector(ocp)
     v_init_expected = np.load(FILE_LOCATION + "/v_init_algebraic_states.npy", allow_pickle=False)
     np.testing.assert_almost_equal(v_init, v_init_expected)
+
+    solution_from_initial_guess = Solution.from_initial_guess(
+        ocp,
+        [
+            ocp.dt_parameter_initial_guess.init,
+            ocp.nlp[0].x_init,
+            ocp.nlp[0].u_init,
+            ocp.parameter_init,
+            ocp.nlp[0].a_init,
+        ],
+    )
+    np.testing.assert_almost_equal(solution_from_initial_guess.vector, v_init_expected)

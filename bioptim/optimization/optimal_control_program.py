@@ -695,6 +695,15 @@ class OptimalControlProgram:
                     )
                     penalty.add_or_replace_to_penalty_pool(self, nlp)
 
+    def _refresh_block_state_bounds_constraints(self) -> None:
+        """Rebuild generated bounds constraints after state bounds are updated."""
+        for nlp in self.nlp:
+            for penalty_index, penalty in enumerate(nlp.g_internal):
+                if penalty and penalty.type == ConstraintFcn.BOUND_STATE:
+                    nlp.g_internal[penalty_index] = []
+
+        self._declare_block_state_bounds_as_constraints()
+
     def _declare_multi_node_penalties(
         self,
         multinode_constraints: ConstraintList,
@@ -1165,6 +1174,9 @@ class OptimalControlProgram:
 
         for nlp in self.nlp:
             nlp.update_bounds_on_plots()
+
+        if x_bounds is not None and hasattr(self, "vector_layout"):
+            self._refresh_block_state_bounds_constraints()
 
     def update_initial_guess(
         self,

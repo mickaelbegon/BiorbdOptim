@@ -7,6 +7,7 @@ import numpy as np
 from scipy import interpolate as sci_interp
 
 from .solution_data import SolutionData, SolutionMerge, TimeAlignment, TimeResolution
+from ..init_vector import _dispatch_state_initial_guess, _dispatch_control_initial_guess
 from ..optimization_vector import OptimizationVectorHelper
 from ...dynamics.ode_solvers import OdeSolver
 from ...interfaces.solve_ivp_interface import solve_ivp_interface
@@ -17,7 +18,6 @@ from ...misc.enums import (
     ControlType,
     CostType,
     Shooting,
-    InterpolationType,
     SolverType,
     SolutionIntegrator,
     Node,
@@ -280,55 +280,57 @@ class Solution:
         # For time
         if len(dt.shape) == 1:
             dt = dt[:, np.newaxis]
+        time = ocp.time_phase_mapping.to_first.map(dt)
 
-        state_vector = [dt]
+        def phase_initial_guess(initial_guesses: InitialGuessList, phase: int) -> InitialGuessList:
+            return initial_guesses[phase] if len(initial_guesses) else InitialGuessList()
 
-        # For states
-        for p, ss in enumerate(sol_states):
-            nb_intermediate_frames = 1
-            if isinstance(ocp.nlp[p].dynamics_type.ode_solver, OdeSolver.COLLOCATION):
-                nb_intermediate_frames = ocp.nlp[p].dynamics_type.ode_solver.polynomial_degree + 1
-            for key in ss.keys():
-                ns = (
-                    ocp.nlp[p].ns * nb_intermediate_frames
-                    if ss[key].init.type == InterpolationType.ALL_POINTS
-                    else ocp.nlp[p].ns + 1 if ss[key].init.type != InterpolationType.EACH_FRAME else ocp.nlp[p].ns
+        states = []
+        controls = []
+        algebraic_states = []
+        for phase, nlp in enumerate(ocp.nlp):
+            states.append(
+                _dispatch_state_initial_guess(
+                    nlp,
+                    nlp.states,
+                    phase_initial_guess(sol_states, phase),
+                    nlp.x_scaling,
+                    nlp.n_states_decision_steps(0),
                 )
-                ss[key].init.check_and_adjust_dimensions(len(ocp.nlp[p].states[key]), ns, "states")
+            )
+            controls.append(
+                _dispatch_control_initial_guess(
+                    nlp,
+                    nlp.controls,
+                    phase_initial_guess(sol_controls, phase),
+                    nlp.u_scaling,
+                )
+            )
+            algebraic_states.append(
+                _dispatch_state_initial_guess(
+                    nlp,
+                    nlp.algebraic_states,
+                    phase_initial_guess(sol_algebraic_states, phase),
+                    nlp.a_scaling,
+                    nlp.n_algebraic_states_decision_steps(0),
+                )
+            )
 
-            for i in range(all_ns[p] * nb_intermediate_frames + 1):
-                for key in ss.keys():
-                    state_vector.append(ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, None])
-        vector = np.vstack(state_vector)
-
-        # For controls
-        for p, ss in enumerate(sol_controls):
-            control_type = ocp.nlp[p].control_type
-            off = 1 if control_type.has_a_final_node else 0
-
-            for key in ss.keys():
-                ss[key].init.check_and_adjust_dimensions(len(ocp.nlp[p].controls[key]), all_ns[p] - 1 + off, "controls")
-
-            for i in range(all_ns[p] + off):
-                for key in ss.keys():
-                    vector = np.concatenate((vector, ss[key].init.evaluate_at(i)[:, np.newaxis]))
-
-        # For parameters
+        parameters = np.zeros((ocp.parameters.shape, 1))
         if n_param:
-            for p, ss in enumerate(sol_params):
-                for key in ss.keys():
-                    vector = np.concatenate((vector, np.repeat(ss[key].init, 1)[:, np.newaxis]))
+            parameter_initial_guesses = phase_initial_guess(sol_params, 0)
+            for key in parameter_initial_guesses.real_keys():
+                scaled_initial_guess = parameter_initial_guesses[key].scale(ocp.parameters[key].scaling.scaling)
+                parameters[ocp.parameters[key].index, :] = np.asarray(scaled_initial_guess.init).reshape((-1, 1))
 
-        # For algebraic_states variables
-        for p, ss in enumerate(sol_algebraic_states):
-            for key in ss.keys():
-                ss[key].init.check_and_adjust_dimensions(
-                    len(ocp.nlp[p].algebraic_states[key]), all_ns[p], "algebraic_states"
-                )
-
-            for i in range(all_ns[p] + 1):
-                for key in ss.keys():
-                    vector = np.concatenate((vector, ss[key].init.evaluate_at(i)[:, np.newaxis]))
+        vector = ocp.vector_layout.stack(
+            time=time,
+            states=states,
+            controls=controls,
+            algebraics=algebraic_states,
+            parameters=parameters,
+            query_function=ocp.vector_layout.query_function,
+        )
 
         return cls(ocp=ocp, vector=vector)
 
