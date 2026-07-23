@@ -13,7 +13,8 @@ MadNLP:
   coordinates, an iterative holonomic reconstruction, and direct collocation.
 
 It records OCP construction time, wall-clock solve time, solver time, iterations,
-cost, status, and constraint violation in JSON and CSV files.
+cost, status, constraint violation, and whether each run is cold or hot in JSON
+and CSV files.
 
 Run a small comparison from the repository root:
 
@@ -51,6 +52,30 @@ The following smoke benchmark was run on macOS on 2026-07-22. Each cell is one
 cold execution without a warm-up, with a tolerance of `1e-6` and at most 200
 iterations. These measurements validate the benchmark and solver integrations;
 use multiple warm-ups and repetitions for performance conclusions.
+
+### Cold versus hot: IPOPT and MadNLP
+
+These paired measurements were run on 2026-07-23. A **cold** measurement is the
+first solve in a fresh Python process. A **hot** measurement rebuilds both the OCP
+and the solver after one successful solve in the same process; it therefore
+amortizes global plugin and Julia initialization, but it is not an OCP warm start
+and does not reuse the previous solution.
+
+| Case | Shooting | IPOPT cold (s) | IPOPT hot (s) | MadNLP cold (s) | MadNLP hot (s) | Hot comparison |
+|---|---:|---:|---:|---:|---:|---|
+| Pendulum | 20 | 0.805 | 0.686 | 7.960 | **0.396** | MadNLP 42% faster |
+| Cube | 10 | 0.178 | 0.211 | 8.521 | **0.018** | MadNLP about 12x faster |
+| Static arm | 10 | **20.364** | 31.497 | 27.483 | **23.320** | MadNLP 26% faster hot |
+| Free time | 10 | **0.680** | **0.759** | failure | failure | IPOPT only successful solver |
+| Multiphase | 10/phase | 0.298 | 0.341 | 7.024 | **0.275** | MadNLP 19% faster |
+| Contact inequalities | 10 | 4.566 | 4.180 | 9.287 | **4.089** | MadNLP 2% faster |
+| Holonomic muscle | 5 | **22.065** | **20.013** | 26.888 | 20.360 | IPOPT 2% faster hot |
+
+MadNLP's cold penalty is 4–8 seconds on the smaller cases because Julia is
+initialized on the first solve. Once hot, MadNLP is competitive or faster on
+most successful cases. The free-time failure remains a robustness gap. Each
+column currently contains one paired observation, so small differences—especially
+the 2% contact and holonomic gaps—should be confirmed with repeated measurements.
 
 | Case | Shooting | Solver | `solve()` (s) | Solver (s) | Iter. | Cost | Max. constraint violation |
 |---|---:|---|---:|---:|---:|---:|---:|

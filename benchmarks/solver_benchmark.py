@@ -57,6 +57,7 @@ class RunResult:
     solver: str
     n_shooting: int
     repetition: int
+    temperature: str
     outcome: str
     build_s: float | None = None
     solve_wall_s: float | None = None
@@ -199,6 +200,7 @@ def run_once(
     solver_name: str,
     n_shooting: int,
     repetition: int,
+    temperature: str,
     tolerance: float,
     max_iterations: int,
     acados_dir: str | None,
@@ -236,6 +238,7 @@ def run_once(
             solver=solver_name,
             n_shooting=n_shooting,
             repetition=repetition,
+            temperature=temperature,
             outcome=outcome,
             build_s=build_s,
             solve_wall_s=solve_wall_s,
@@ -253,6 +256,7 @@ def run_once(
             solver=solver_name,
             n_shooting=n_shooting,
             repetition=repetition,
+            temperature=temperature,
             outcome="exception",
             error=f"{type(error).__name__}: {error}",
         )
@@ -271,6 +275,8 @@ def summarize(rows: list[RunResult]) -> list[dict]:
     summary = []
     for (case, solver, n_shooting), group in sorted(groups.items()):
         successful = [row for row in group if row.outcome == "success"]
+        cold = [row for row in successful if row.temperature == "cold"]
+        hot = [row for row in successful if row.temperature == "hot"]
         summary.append(
             {
                 "case": case,
@@ -278,6 +284,10 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                 "n_shooting": n_shooting,
                 "successful_runs": len(successful),
                 "total_runs": len(group),
+                "cold_solve_wall_s": median_or_none(cold, "solve_wall_s"),
+                "hot_solve_wall_s": median_or_none(hot, "solve_wall_s"),
+                "cold_solver_s": median_or_none(cold, "solver_s"),
+                "hot_solver_s": median_or_none(hot, "solver_s"),
                 "median_build_s": median_or_none(successful, "build_s"),
                 "median_solve_wall_s": median_or_none(successful, "solve_wall_s"),
                 "median_solver_s": median_or_none(successful, "solver_s"),
@@ -356,24 +366,41 @@ def main(argv: list[str] | None = None) -> int:
                             solver=solver_name,
                             n_shooting=n_shooting,
                             repetition=0,
+                            temperature="n/a",
                             outcome="unavailable",
                             error=reason,
                         )
                     )
                     continue
-                for warmup in range(args.warmups):
-                    warmup_result = run_once(
-                        case,
-                        solver_name,
-                        n_shooting,
-                        -(warmup + 1),
-                        args.tolerance,
-                        args.max_iterations,
-                        args.acados_dir,
-                    )
-                    if warmup_result.outcome != "success":
+                if args.warmups:
+                    for warmup in range(args.warmups):
+                        warmup_result = run_once(
+                            case,
+                            solver_name,
+                            n_shooting,
+                            -(warmup + 1),
+                            "cold" if warmup == 0 else "warmup",
+                            args.tolerance,
+                            args.max_iterations,
+                            args.acados_dir,
+                        )
                         rows.append(warmup_result)
-                        break
+                        if warmup_result.outcome != "success":
+                            break
+                    else:
+                        rows.extend(
+                            run_once(
+                                case,
+                                solver_name,
+                                n_shooting,
+                                repetition,
+                                "hot",
+                                args.tolerance,
+                                args.max_iterations,
+                                args.acados_dir,
+                            )
+                            for repetition in range(1, args.repetitions + 1)
+                        )
                 else:
                     rows.extend(
                         run_once(
@@ -381,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                             solver_name,
                             n_shooting,
                             repetition,
+                            "cold" if repetition == 1 else "hot",
                             args.tolerance,
                             args.max_iterations,
                             args.acados_dir,
