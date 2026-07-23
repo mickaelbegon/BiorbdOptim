@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - ".github/madnlp-linux-environment.yml"
+      - ".github/scripts/install_biorbd_casadi_linux.sh"
       - ".github/workflows/madnlp_linux.yml"
       - "benchmarks/**"
       - "bioptim/interfaces/**"
@@ -71,10 +72,10 @@ jobs:
       - name: Configure MadNLP runtime
         run: echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.cache/madnlp/foo/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
-      - name: Install CasADi wheel and Bioptim
+      - name: Install CasADi wheel, biorbd, and Bioptim
         run: |
-          conda remove --force --yes casadi
           python -m pip install --no-deps "casadi==$CASADI_VERSION"
+          .github/scripts/install_biorbd_casadi_linux.sh
           python -m pip install --no-deps -e .
 
       - name: Verify solver plugins
@@ -162,10 +163,10 @@ jobs:
       - name: Configure MadNLP runtime
         run: echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.cache/madnlp/foo/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
 
-      - name: Install CasADi wheel and Bioptim
+      - name: Install CasADi wheel, biorbd, and Bioptim
         run: |
-          conda remove --force --yes casadi
           python -m pip install --no-deps "casadi==$CASADI_VERSION"
+          .github/scripts/install_biorbd_casadi_linux.sh
           python -m pip install --no-deps -e .
 
       - name: Install ACADOS
