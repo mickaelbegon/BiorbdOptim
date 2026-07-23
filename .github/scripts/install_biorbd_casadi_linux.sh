@@ -34,7 +34,7 @@ cmake \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
-  -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
+  -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -I$CONDA_PREFIX/include/eigen3" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
   -DCasadi_DIR="$casadi_package_dir" \
   -DCasadi_INCLUDE_DIR="$casadi_package_dir/include/casadi" \
@@ -55,7 +55,7 @@ cmake \
   -DBUILD_TESTS=OFF \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
-  -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
+  -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -I$CONDA_PREFIX/include/eigen3" \
   -DCasadi_DIR="$casadi_package_dir/cmake" \
   -DINSTALL_DEPENDENCIES_PREFIX="$CONDA_PREFIX" \
   -DMATH_LIBRARY_BACKEND=Casadi \
