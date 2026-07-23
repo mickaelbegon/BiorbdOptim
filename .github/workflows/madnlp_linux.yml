@@ -51,7 +51,7 @@ jobs:
           miniforge-version: latest
           activate-environment: bioptim-madnlp-linux
           environment-file: .github/madnlp-linux-environment.yml
-          auto-activate-base: false
+          conda-remove-defaults: true
 
       - name: Cache MadNLP runtime
         id: madnlp-cache
@@ -73,7 +73,7 @@ jobs:
 
       - name: Install CasADi wheel and Bioptim
         run: |
-          python -m pip install --force-reinstall --no-deps "casadi==$CASADI_VERSION"
+          python -m pip install --ignore-installed --no-deps "casadi==$CASADI_VERSION"
           python -m pip install --no-deps -e .
 
       - name: Verify solver plugins
@@ -133,7 +133,7 @@ jobs:
           miniforge-version: latest
           activate-environment: bioptim-madnlp-linux
           environment-file: .github/madnlp-linux-environment.yml
-          auto-activate-base: false
+          conda-remove-defaults: true
 
       - name: Restore MadNLP runtime
         id: madnlp-cache
@@ -155,7 +155,7 @@ jobs:
 
       - name: Install CasADi wheel and Bioptim
         run: |
-          python -m pip install --force-reinstall --no-deps "casadi==$CASADI_VERSION"
+          python -m pip install --ignore-installed --no-deps "casadi==$CASADI_VERSION"
           python -m pip install --no-deps -e .
 
       - name: Install ACADOS
