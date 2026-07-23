@@ -1,0 +1,224 @@
+name: MadNLP Linux
+
+on:
+  pull_request:
+    paths:
+      - ".github/madnlp-linux-environment.yml"
+      - ".github/workflows/madnlp_linux.yml"
+      - "benchmarks/**"
+      - "bioptim/interfaces/**"
+      - "bioptim/optimization/**"
+      - "tests/shard4/test_madnlp.py"
+      - "tests/shard5/test_solver_options.py"
+  workflow_dispatch:
+    inputs:
+      warmups:
+        description: Number of warm-up solves before measured repetitions
+        required: true
+        default: "1"
+      repetitions:
+        description: Number of hot measured solves
+        required: true
+        default: "1"
+
+permissions:
+  contents: read
+
+env:
+  CASADI_VERSION: "3.7.2"
+  MADNLP_ARCHIVE: madnlp-jl1.10.4-ubuntu-20.04-x64.zip
+  MADNLP_SHA256: 333c42a1beb04fdba84410cc861927a74c3591c3b9cffd15323cbfeb44fbc8a0
+  MADNLP_URL: https://github.com/tmmsartor/madnlp_c/releases/download/nightly-cpu_only/madnlp-jl1.10.4-ubuntu-20.04-x64.zip
+
+jobs:
+  integration-tests:
+    name: MadNLP integration tests
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: bioptim-madnlp-linux
+          environment-file: .github/madnlp-linux-environment.yml
+          auto-activate-base: false
+
+      - name: Cache MadNLP runtime
+        id: madnlp-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/madnlp
+          key: madnlp-cpu-jl1.10.4-linux-${{ env.MADNLP_SHA256 }}
+
+      - name: Install MadNLP runtime
+        if: steps.madnlp-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache/madnlp
+          curl --fail --location --retry 3 "$MADNLP_URL" --output "/tmp/$MADNLP_ARCHIVE"
+          echo "$MADNLP_SHA256  /tmp/$MADNLP_ARCHIVE" | sha256sum --check
+          unzip -q "/tmp/$MADNLP_ARCHIVE" -d .cache/madnlp
+
+      - name: Configure MadNLP runtime
+        run: echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.cache/madnlp/foo/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install CasADi wheel and Bioptim
+        run: |
+          python -m pip install --force-reinstall --no-deps "casadi==$CASADI_VERSION"
+          python -m pip install --no-deps -e .
+
+      - name: Verify solver plugins
+        run: |
+          python - <<'PY'
+          import casadi as cas
+
+          print(f"CasADi {cas.__version__}")
+          for name in ("ipopt", "fatrop", "madnlp"):
+              available = cas.has_nlpsol(name)
+              print(f"{name}: {available}")
+              assert available, f"CasADi plugin {name!r} is unavailable"
+          PY
+
+      - name: Run MadNLP tests
+        run: pytest -q tests/shard4/test_madnlp.py tests/shard5/test_solver_options.py
+
+      - name: Run three-solver smoke benchmark
+        env:
+          MPLCONFIGDIR: /tmp/matplotlib
+        run: |
+          python -m benchmarks.solver_benchmark \
+            --cases pendulum \
+            --solvers ipopt fatrop madnlp \
+            --sizes 5 \
+            --warmups 0 \
+            --repetitions 1 \
+            --output /tmp/madnlp-linux-smoke
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/madnlp-linux-smoke.json").read_text())
+          outcomes = {(row["solver"], row["outcome"]) for row in payload["runs"]}
+          assert outcomes == {("ipopt", "success"), ("fatrop", "success"), ("madnlp", "success")}, outcomes
+          PY
+
+  benchmark:
+    name: Complete Linux benchmark
+    if: github.event_name == 'workflow_dispatch'
+    needs: integration-tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout code and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: bioptim-madnlp-linux
+          environment-file: .github/madnlp-linux-environment.yml
+          auto-activate-base: false
+
+      - name: Restore MadNLP runtime
+        id: madnlp-cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/madnlp
+          key: madnlp-cpu-jl1.10.4-linux-${{ env.MADNLP_SHA256 }}
+
+      - name: Install MadNLP runtime on cache miss
+        if: steps.madnlp-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p .cache/madnlp
+          curl --fail --location --retry 3 "$MADNLP_URL" --output "/tmp/$MADNLP_ARCHIVE"
+          echo "$MADNLP_SHA256  /tmp/$MADNLP_ARCHIVE" | sha256sum --check
+          unzip -q "/tmp/$MADNLP_ARCHIVE" -d .cache/madnlp
+
+      - name: Configure MadNLP runtime
+        run: echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/.cache/madnlp/foo/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Install CasADi wheel and Bioptim
+        run: |
+          python -m pip install --force-reinstall --no-deps "casadi==$CASADI_VERSION"
+          python -m pip install --no-deps -e .
+
+      - name: Install ACADOS
+        run: ./external/acados_install_linux.sh 2 "$CONDA_PREFIX"
+
+      - name: Verify benchmark solvers
+        run: |
+          python - <<'PY'
+          import casadi as cas
+          import importlib.util
+
+          for name in ("ipopt", "fatrop", "madnlp"):
+              assert cas.has_nlpsol(name), name
+          assert importlib.util.find_spec("acados_template") is not None
+          print(f"CasADi {cas.__version__}; IPOPT, FATROP, ACADOS, and MadNLP are available")
+          PY
+
+      - name: Run complete benchmark
+        env:
+          MPLCONFIGDIR: /tmp/matplotlib
+          PYTHONPATH: ${{ github.workspace }}
+          WARMUPS: ${{ inputs.warmups }}
+          REPETITIONS: ${{ inputs.repetitions }}
+        run: |
+          result_root="$GITHUB_WORKSPACE/benchmarks/results/linux"
+          mkdir -p "$result_root"
+
+          cases=(pendulum pendulum cube static_arm free_time multiphase contact_inequality holonomic_muscle muscle_fatigue)
+          sizes=(20 500 10 10 10 10 10 5 50)
+          labels=(pendulum-20 pendulum-500 cube-10 static-arm-10 free-time-10 multiphase-10 contact-10 holonomic-muscle-5 muscle-fatigue-50)
+          solvers=(ipopt fatrop acados madnlp)
+
+          for index in "${!cases[@]}"; do
+            for solver in "${solvers[@]}"; do
+              output="$result_root/${labels[$index]}-$solver"
+              run_directory="$(mktemp -d)"
+              if ! (
+                cd "$run_directory"
+                python -m benchmarks.solver_benchmark \
+                  --cases "${cases[$index]}" \
+                  --solvers "$solver" \
+                  --sizes "${sizes[$index]}" \
+                  --warmups "$WARMUPS" \
+                  --repetitions "$REPETITIONS" \
+                  --max-iterations 500 \
+                  --acados-dir "$CONDA_PREFIX" \
+                  --output "$output"
+              ); then
+                echo "::warning title=Benchmark combination failed::${labels[$index]} with $solver did not produce a successful solve"
+              fi
+            done
+          done
+
+      - name: Merge benchmark results
+        run: |
+          python benchmarks/merge_benchmark_results.py \
+            benchmarks/results/linux \
+            --output benchmarks/results/linux-benchmark
+          cat benchmarks/results/linux-benchmark.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Linux benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-solver-benchmark-${{ github.run_id }}
+          path: |
+            benchmarks/results/linux/**
+            benchmarks/results/linux-benchmark.*
+          if-no-files-found: error
+          retention-days: 30

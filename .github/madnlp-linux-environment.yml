@@ -1,0 +1,10 @@
+name: bioptim-madnlp-linux
+channels:
+  - conda-forge
+dependencies:
+  - python =3.11
+  - biorbd >=1.12,<1.13
+  - matplotlib-base >=3.8
+  - numpy >=2.4,<3
+  - pip
+  - pytest
