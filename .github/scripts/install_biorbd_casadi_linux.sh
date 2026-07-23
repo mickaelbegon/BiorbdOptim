@@ -44,6 +44,11 @@ cmake \
   -DRBDL_BUILD_TESTS=OFF
 cmake --build "$build_root/rbdl-build" --target install --parallel 2
 
+# RBDL installs both math backends. If the Eigen headers remain at
+# $CONDA_PREFIX/include/rbdl, biorbd finds them before include/rbdl-casadi and
+# silently compiles the CasADi backend against the wrong API.
+mv "$CONDA_PREFIX/include/rbdl" "$CONDA_PREFIX/include/rbdl-eigen-unused"
+
 echo "Building biorbd ${BIORBD_TAG} against the same CasADi ABI"
 git clone --quiet --branch "$BIORBD_TAG" --depth 1 "$BIORBD_REPOSITORY" "$build_root/biorbd"
 cmake \
