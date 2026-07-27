@@ -23,6 +23,7 @@ solver.set_convergence_tolerance(1e-6)
 solver.set_constraint_tolerance(1e-6)
 solver.set_maximum_iterations(500)
 solver.set_print_level("INFO")
+solver.set_linear_solver("umfpack")
 solution = ocp.solve(solver)
 ```
 
@@ -33,6 +34,25 @@ public log-level names are converted to the C interface values `TRACE=1`,
 `DEBUG=2`, `INFO=3`, `NOTICE=4`, `WARN=5`, and `ERROR=6`.
 `set_option_unsafe(value, name)` adds another value to that nested dictionary;
 the CasADi plugin validates its name and type when it constructs the solver.
+
+## Linear solvers
+
+The CPU `libMad` runtime used by CasADi exposes three relevant backends:
+
+- `mumps` (default): sparse symmetric-indefinite factorization with inertia;
+- `umfpack`: sparse LU factorization, used by MadNLP in inertia-free mode;
+- `lapack_cpu`: dense Bunch-Kaufman factorization, intended only for small
+  dense KKT systems.
+
+Select one with `solver.set_linear_solver(...)`. Bioptim translates these
+lowercase aliases to the Julia type names required by `libMad`
+(`MumpsSolver`, `UmfpackSolver`, and `LapackCPUSolver`). Passing the lowercase
+values directly through `set_option_unsafe` is not equivalent: current
+`libMad` builds warn and silently retain MUMPS.
+
+MadNLP also supports HSL, Pardiso, and GPU linear solvers in its Julia
+packages, but they are not exposed by the CPU `libMad` runtime validated here.
+They require a separately compiled runtime before Bioptim can select them.
 
 Warm-start primal values and multipliers are passed through the standard
 `x0`, `lam_x0`, and `lam_g0` nlpsol inputs, with `dual_initialized` enabled.

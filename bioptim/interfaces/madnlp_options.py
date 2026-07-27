@@ -22,6 +22,16 @@ MADNLP_UNAVAILABLE = (
     "Bioptim MadNLP installation instructions."
 )
 
+MADNLP_LINEAR_SOLVERS = {
+    "mumps": "MumpsSolver",
+    "mumpssolver": "MumpsSolver",
+    "umfpack": "UmfpackSolver",
+    "umfpacksolver": "UmfpackSolver",
+    "lapack": "LapackCPUSolver",
+    "lapack_cpu": "LapackCPUSolver",
+    "lapackcpusolver": "LapackCPUSolver",
+}
+
 
 def has_madnlp() -> bool:
     """Return whether the installed CasADi build exposes the MadNLP nlpsol plugin."""
@@ -53,6 +63,7 @@ class MADNLP(GenericSolver):
     _tol: Float = 1e-6
     _max_iter: Int = 1000
     _print_level: Int = 3
+    _linear_solver: Str = "MumpsSolver"
     _c_compile: Bool = False
     _madnlp_options: dict[str, Any] = field(default_factory=dict)
 
@@ -71,6 +82,10 @@ class MADNLP(GenericSolver):
     @property
     def print_level(self) -> Int:
         return self._print_level
+
+    @property
+    def linear_solver(self) -> Str:
+        return self._linear_solver
 
     @property
     def c_compile(self) -> Bool:
@@ -98,6 +113,21 @@ class MADNLP(GenericSolver):
             raise ValueError("MadNLP print level must be an integer from 1 to 6 or a MadNLP log-level name")
         self._print_level = value
 
+    def set_linear_solver(self, value: Str) -> None:
+        """Select a CPU linear solver bundled in the current MadNLP ``libMad`` runtime.
+
+        ``libMad`` expects Julia type names rather than the lowercase names shown
+        by solver banners. Bioptim accepts both forms and emits the canonical
+        value, avoiding the runtime's silent fallback to MUMPS.
+        """
+        if not isinstance(value, str):
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, or LAPACK CPU")
+        key = value.replace("-", "_").replace(" ", "_").lower()
+        try:
+            self._linear_solver = MADNLP_LINEAR_SOLVERS[key]
+        except KeyError as error:
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, or LAPACK CPU") from error
+
     def set_warm_start_options(self, val: Float = 1e-10) -> None:
         """Enable use of multipliers supplied through CasADi's standard nlpsol inputs."""
         self._madnlp_options["dual_initialized"] = True
@@ -119,6 +149,7 @@ class MADNLP(GenericSolver):
             "tol": self._tol,
             "max_iter": self._max_iter,
             "print_level": self._print_level,
+            "linear_solver": self._linear_solver,
             **self._madnlp_options,
         }
         return {"madnlp": madnlp, **solver.options_common}

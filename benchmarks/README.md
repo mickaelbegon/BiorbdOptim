@@ -61,6 +61,63 @@ python -m benchmarks.solver_benchmark \
   --repetitions 1
 ```
 
+Compare MadNLP's CPU linear solvers. Run each command in a fresh process so
+that every backend has its own cold initialization measurement:
+
+```bash
+for linear_solver in mumps umfpack lapack_cpu; do
+  python -m benchmarks.solver_benchmark \
+    --cases cube \
+    --solvers madnlp \
+    --sizes 10 \
+    --madnlp-linear-solver "$linear_solver" \
+    --warmups 1 \
+    --repetitions 1 \
+    --output "benchmarks/results/madnlp-linear-cube-$linear_solver"
+  python -m benchmarks.solver_benchmark \
+    --cases pendulum \
+    --solvers madnlp \
+    --sizes 100 \
+    --madnlp-linear-solver "$linear_solver" \
+    --warmups 1 \
+    --repetitions 1 \
+    --output "benchmarks/results/madnlp-linear-pendulum-$linear_solver"
+done
+```
+
+MUMPS and UMFPACK are sparse solvers. LAPACK CPU forms and factorizes a dense
+KKT matrix and should only be considered for small problems. The official
+[MadNLP linear-solver documentation](https://madsuite.org/MadNLP.jl/stable/)
+recommends sparse linear solvers once a problem exceeds 1,000 variables. HSL,
+Pardiso, and GPU backends need a custom `libMad` runtime and are outside this
+CPU benchmark.
+
+### Exploratory macOS results
+
+These measurements were collected on 2026-07-27 on macOS 26.5.1 arm64 with
+Python 3.11.15, CasADi 3.8.0, MadNLP 0.9.1, and Bioptim 3.5.0. Each backend ran
+in a fresh process with one cold solve followed by one hot solve. There is only
+one observation per cell, so small differences should be treated as ties.
+
+| Case | Shooting | Linear solver | Cold solve (s) | Hot solve (s) | Hot solver (s) | Iter. | Cost | Max violation |
+|---|---:|---|---:|---:|---:|---:|---:|---:|
+| Cube | 10 | MUMPS | 6.754 | **0.018** | 0.00162 | 11 | 1117.997245 | 7.55e-15 |
+| Cube | 10 | UMFPACK | **4.523** | **0.018** | **0.00148** | 11 | 1117.997245 | 1.78e-15 |
+| Cube | 10 | LAPACK CPU | 5.153 | 0.028 | 0.00305 | 11 | 1117.997245 | 1.78e-15 |
+| Pendulum | 100 | MUMPS | 6.644 | **1.964** | **0.425** | **48** | 36.096161 | 3.85e-13 |
+| Pendulum | 100 | UMFPACK | **6.620** | 2.384 | 0.760 | 71 | 36.096161 | 2.60e-09 |
+| Pendulum | 100 | LAPACK CPU | 8.555 | 4.630 | 1.970 | **48** | 36.096161 | 7.11e-15 |
+| Muscle fatigue | 20 | MUMPS | **14.417** | **5.846** | **5.200** | **94** | 17.326970 | 7.60e-10 |
+| Muscle fatigue | 20 | UMFPACK | 15.326 | 8.593 | 7.985 | 133 | 17.326969 | 3.55e-12 |
+| Muscle fatigue | 20 | LAPACK CPU | 160.030 | — | — | 94 | 17.326970 | 7.59e-10 |
+
+The LAPACK CPU hot run on `muscle_fatigue` was intentionally stopped after its
+cold solve took 160 seconds. On the two nontrivial sparse cases, MUMPS is the
+clear default: UMFPACK's inertia-free path needs 48% more iterations on the
+pendulum and 41% more on muscle fatigue. LAPACK preserves the MUMPS iteration
+count but its dense factorization makes the pendulum hot solve 2.4 times slower
+and the muscle-fatigue cold solve 11 times slower.
+
 ## Reproducible Linux environment
 
 The official CasADi 3.7.2 Linux wheel contains the IPOPT, FATROP, and MadNLP

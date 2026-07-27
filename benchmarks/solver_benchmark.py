@@ -57,6 +57,7 @@ DEFAULT_CASE_NAMES = CASE_NAMES[:-2]
 class RunResult:
     case: str
     solver: str
+    linear_solver: str | None
     n_shooting: int
     repetition: int
     temperature: str
@@ -95,7 +96,13 @@ def solver_available(name: str) -> tuple[bool, str | None]:
     raise ValueError(f"Unknown solver: {name}")
 
 
-def make_solver(name: str, tolerance: float, max_iterations: int, acados_dir: str | None):
+def make_solver(
+    name: str,
+    tolerance: float,
+    max_iterations: int,
+    acados_dir: str | None,
+    madnlp_linear_solver: str | None = None,
+):
     factories = {
         "ipopt": Solver.IPOPT,
         "fatrop": Solver.FATROP,
@@ -107,6 +114,8 @@ def make_solver(name: str, tolerance: float, max_iterations: int, acados_dir: st
     solver.set_constraint_tolerance(tolerance)
     solver.set_maximum_iterations(max_iterations)
     solver.set_print_level("ERROR" if name == "madnlp" else 0)
+    if name == "madnlp" and madnlp_linear_solver is not None:
+        solver.set_linear_solver(madnlp_linear_solver)
     if name == "acados" and acados_dir:
         solver.set_acados_dir(acados_dir)
     return solver
@@ -222,12 +231,15 @@ def run_once(
     tolerance: float,
     max_iterations: int,
     acados_dir: str | None,
+    madnlp_linear_solver: str | None = None,
 ) -> RunResult:
+    selected_linear_solver = madnlp_linear_solver if solver_name == "madnlp" else None
     try:
         start = time.perf_counter()
         ocp = prepare_case(case, n_shooting)
         build_s = time.perf_counter() - start
-        solver = make_solver(solver_name, tolerance, max_iterations, acados_dir)
+        solver = make_solver(solver_name, tolerance, max_iterations, acados_dir, madnlp_linear_solver)
+        selected_linear_solver = solver.linear_solver if solver_name == "madnlp" else None
 
         start = time.perf_counter()
         solution = ocp.solve(solver)
@@ -256,6 +268,7 @@ def run_once(
         return RunResult(
             case=case,
             solver=solver_name,
+            linear_solver=selected_linear_solver,
             n_shooting=n_shooting,
             repetition=repetition,
             temperature=temperature,
@@ -279,6 +292,7 @@ def run_once(
         return RunResult(
             case=case,
             solver=solver_name,
+            linear_solver=selected_linear_solver,
             n_shooting=n_shooting,
             repetition=repetition,
             temperature=temperature,
@@ -302,12 +316,14 @@ def median_ratio_or_none(rows: list[RunResult], numerator: str, denominator: str
 
 
 def summarize(rows: list[RunResult]) -> list[dict]:
-    groups: dict[tuple[str, str, int], list[RunResult]] = {}
+    groups: dict[tuple[str, str, str | None, int], list[RunResult]] = {}
     for row in rows:
-        groups.setdefault((row.case, row.solver, row.n_shooting), []).append(row)
+        groups.setdefault((row.case, row.solver, row.linear_solver, row.n_shooting), []).append(row)
 
     summary = []
-    for (case, solver, n_shooting), group in sorted(groups.items()):
+    for (case, solver, linear_solver, n_shooting), group in sorted(
+        groups.items(), key=lambda item: tuple("" if value is None else value for value in item[0])
+    ):
         successful = [row for row in group if row.outcome == "success"]
         cold = [row for row in successful if row.temperature == "cold"]
         hot = [row for row in successful if row.temperature == "hot"]
@@ -315,6 +331,7 @@ def summarize(rows: list[RunResult]) -> list[dict]:
             {
                 "case": case,
                 "solver": solver,
+                "linear_solver": linear_solver,
                 "n_shooting": n_shooting,
                 "successful_runs": len(successful),
                 "total_runs": len(group),
@@ -371,6 +388,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--tolerance", type=float, default=1e-6)
     parser.add_argument("--max-iterations", type=int, default=500)
+    parser.add_argument(
+        "--madnlp-linear-solver",
+        choices=("mumps", "umfpack", "lapack_cpu"),
+        default="mumps",
+        help="MadNLP linear solver. Run each backend in a fresh process for comparable cold timings.",
+    )
     parser.add_argument("--acados-dir")
     parser.add_argument("--output", type=Path)
     return parser.parse_args(argv)
@@ -395,6 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         "warmups": args.warmups,
         "tolerance": args.tolerance,
         "max_iterations": args.max_iterations,
+        "madnlp_linear_solver": args.madnlp_linear_solver,
     }
     rows: list[RunResult] = []
     for case in args.cases:
@@ -406,6 +430,7 @@ def main(argv: list[str] | None = None) -> int:
                         RunResult(
                             case=case,
                             solver=solver_name,
+                            linear_solver=args.madnlp_linear_solver if solver_name == "madnlp" else None,
                             n_shooting=n_shooting,
                             repetition=0,
                             temperature="n/a",
@@ -425,6 +450,7 @@ def main(argv: list[str] | None = None) -> int:
                             args.tolerance,
                             args.max_iterations,
                             args.acados_dir,
+                            args.madnlp_linear_solver,
                         )
                         rows.append(warmup_result)
                         if warmup_result.outcome != "success":
@@ -440,6 +466,7 @@ def main(argv: list[str] | None = None) -> int:
                                 args.tolerance,
                                 args.max_iterations,
                                 args.acados_dir,
+                                args.madnlp_linear_solver,
                             )
                             for repetition in range(1, args.repetitions + 1)
                         )
@@ -454,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                             args.tolerance,
                             args.max_iterations,
                             args.acados_dir,
+                            args.madnlp_linear_solver,
                         )
                         for repetition in range(1, args.repetitions + 1)
                     )

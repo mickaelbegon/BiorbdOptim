@@ -31,6 +31,8 @@ def test_madnlp_solver_options(monkeypatch):
     solver.set_constraint_tolerance(2e-7)
     solver.set_maximum_iterations(42)
     solver.set_print_level(1)
+    solver.set_linear_solver("umfpack")
+    assert solver.linear_solver == "UmfpackSolver"
     solver.set_option_unsafe("exact", "hessian_approximation")
     options = solver.as_dict(FakeSolver({"print_time": False}))
     assert options == {
@@ -38,10 +40,37 @@ def test_madnlp_solver_options(monkeypatch):
             "tol": 2e-7,
             "max_iter": 42,
             "print_level": 1,
+            "linear_solver": "UmfpackSolver",
             "hessian_approximation": "exact",
         },
         "print_time": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("mumps", "MumpsSolver"),
+        ("MumpsSolver", "MumpsSolver"),
+        ("umfpack", "UmfpackSolver"),
+        ("UmfpackSolver", "UmfpackSolver"),
+        ("lapack", "LapackCPUSolver"),
+        ("lapack_cpu", "LapackCPUSolver"),
+        ("LapackCPUSolver", "LapackCPUSolver"),
+    ),
+)
+def test_madnlp_linear_solver_aliases(monkeypatch, value, expected):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    solver.set_linear_solver(value)
+    assert solver.linear_solver == expected
+
+
+def test_madnlp_rejects_unknown_linear_solver(monkeypatch):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    with pytest.raises(ValueError, match="MUMPS, UMFPACK, or LAPACK CPU"):
+        solver.set_linear_solver("ma57")
 
 
 def test_madnlp_unavailable(monkeypatch):

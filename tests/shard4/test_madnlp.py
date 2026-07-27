@@ -1,3 +1,7 @@
+import subprocess
+import sys
+import textwrap
+
 import numpy as np
 import pytest
 
@@ -35,6 +39,40 @@ def test_madnlp_casadi_plugin_and_warm_start_inputs():
     assert np.array(second["g"]).size == 1
     assert np.array(second["lam_x"]).size == 2
     assert np.array(second["lam_g"]).size == 1
+
+
+def test_madnlp_linear_solver_backends():
+    """Verify that libMad selects the requested backend instead of falling back to MUMPS."""
+    script = textwrap.dedent(
+        """
+        import casadi as cas
+        from bioptim import Solver
+
+        x = cas.MX.sym("x", 2)
+        nlp = {"x": x, "f": (x[0] - 1) ** 2 + (x[1] - 2) ** 2, "g": x[0] + x[1]}
+        for index, linear_solver in enumerate(("mumps", "umfpack", "lapack_cpu")):
+            options = Solver.MADNLP()
+            options.set_convergence_tolerance(1e-8)
+            options.set_print_level("INFO")
+            options.set_linear_solver(linear_solver)
+            solver = cas.nlpsol(
+                f"madnlp_backend_{index}",
+                "madnlp",
+                nlp,
+                options.as_dict(type("I", (), {"options_common": {}})()),
+            )
+            result = solver(x0=[0, 0], lbg=3, ubg=3)
+            assert solver.stats()["success"]
+            assert abs(float(result["f"])) <= 1e-10
+        """
+    )
+    process = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    output = process.stdout + process.stderr
+
+    assert process.returncode == 0, output
+    assert "running with MUMPS" in output
+    assert "running with umfpack" in output
+    assert "running with Lapack-CPU" in output
 
 
 def test_madnlp_solves_bioptim_pendulum_ocp():
