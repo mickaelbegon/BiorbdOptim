@@ -320,14 +320,23 @@ To use the `Acados` solver on Windows, one must compile it themselves.
 HSL is a collection of state-of-the-art packages for large-scale scientific computation. 
 Among its best-known packages are those for the solution of sparse linear systems (`ma27`, `ma57`, etc.), compatible with ̀`Ipopt`.
 HSL packages are [available](http://www.hsl.rl.ac.uk/download/coinhsl-archive-linux-x86_64/2014.01.17/) at no cost for academic research and teaching. 
-Once you obtain the HSL dynamic library (precompiled `libhsl.so` for Linux, to be compiled `libhsl.dylib` for MacOSX, `libhsl.dll` for Windows), you just have to place it in your `Anaconda3` environment into the `lib/` folder.
-You can now use all the options of `bioptim`, including the HSL linear solvers with `Ipopt`.
+Once you obtain a compatible HSL dynamic library (`libhsl.so`,
+`libhsl.dylib`, `libhsl.dll`, or `libcoinhsl`), it can be installed in the
+Conda environment's `lib/` directory or passed explicitly to IPOPT. Recent
+IPOPT versions can load HSL at runtime, so IPOPT itself does not need to be
+recompiled.
 We recommend using `ma57` as a default linear solver by calling as such:
 ```python
 solver = Solver.IPOPT()
 solver.set_linear_solver("ma57")
+solver.set_hsl_library("/absolute/path/to/libcoinhsl.so")  # Optional if already discoverable
 ocp.solve(solver)
 ```
+
+MadNLP uses HSL through Julia's `HSL.jl`/`MadNLPHSL` packages. Its libHSL
+must therefore be included in the compiled `libMad` bundle and made available
+through `JULIA_HSL_LIBRARY_PATH`; an IPOPT `libcoinhsl` is not automatically
+interchangeable with that Julia runtime.
 ## Installation complete
 Once `bioptim` is downloaded, navigate to the root folder and (assuming your conda environment is loaded if needed), you can type the following command:
 ```bash 

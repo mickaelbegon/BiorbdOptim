@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import textwrap
@@ -73,6 +74,42 @@ def test_madnlp_linear_solver_backends():
     assert "running with MUMPS" in output
     assert "running with umfpack" in output
     assert "running with Lapack-CPU" in output
+
+
+@pytest.mark.skipif(
+    os.environ.get("BIOPTIM_TEST_MADNLP_PARDISO_MKL") != "1",
+    reason="requires an x86-64 libMad runtime compiled with MadNLPPardiso",
+)
+def test_madnlp_pardiso_mkl_backend():
+    """Verify that requesting PARDISO MKL does not silently retain MUMPS."""
+    script = textwrap.dedent(
+        """
+        import casadi as cas
+        from bioptim import Solver
+
+        x = cas.MX.sym("x", 2)
+        nlp = {"x": x, "f": (x[0] - 1) ** 2 + (x[1] - 2) ** 2, "g": x[0] + x[1]}
+        options = Solver.MADNLP()
+        options.set_print_level("INFO")
+        options.set_linear_solver("pardiso_mkl")
+        solver = cas.nlpsol(
+            "madnlp_pardiso_mkl",
+            "madnlp",
+            nlp,
+            options.as_dict(type("I", (), {"options_common": {}})()),
+        )
+        result = solver(x0=[0, 0], lbg=3, ubg=3)
+        assert solver.stats()["success"]
+        assert abs(float(result["f"])) <= 1e-10
+        """
+    )
+    process = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
+    output = process.stdout + process.stderr
+
+    assert process.returncode == 0, output
+    assert "running with pardiso-mkl" in output.lower()
+    assert "unknown type" not in output.lower()
+    assert "running with MUMPS" not in output
 
 
 def test_madnlp_solves_bioptim_pendulum_ocp():

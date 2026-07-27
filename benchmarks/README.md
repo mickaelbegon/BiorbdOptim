@@ -85,12 +85,63 @@ for linear_solver in mumps umfpack lapack_cpu; do
 done
 ```
 
+With an x86-64 `libMad` runtime compiled with `MadNLPPardiso`, benchmark
+PARDISO MKL in a fresh process:
+
+```bash
+MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+python -m benchmarks.solver_benchmark \
+  --cases pendulum muscle_fatigue \
+  --solvers madnlp \
+  --sizes 100 \
+  --madnlp-linear-solver pardiso_mkl \
+  --warmups 1 \
+  --repetitions 3
+```
+
+IPOPT supports two distinct PARDISO interfaces. A build linked against Intel
+oneMKL accepts `pardisomkl`:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases pendulum \
+  --solvers ipopt \
+  --sizes 100 \
+  --ipopt-linear-solver pardisomkl
+```
+
+IPOPT 3.14 can load Panua PARDISO dynamically without recompiling IPOPT:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases pendulum \
+  --solvers ipopt \
+  --sizes 100 \
+  --ipopt-linear-solver pardiso \
+  --ipopt-pardiso-library /absolute/path/to/libpardiso.so
+```
+
+Similarly, a compatible HSL library can be loaded at runtime:
+
+```bash
+python -m benchmarks.solver_benchmark \
+  --cases pendulum \
+  --solvers ipopt \
+  --sizes 100 \
+  --ipopt-linear-solver ma57 \
+  --ipopt-hsl-library /absolute/path/to/libcoinhsl.so
+```
+
+The IPOPT build still determines which names are valid. In particular, the
+macOS arm64 Conda build tested here is linked against OpenBLAS and accepts
+`pardiso` through the runtime loader, but not `pardisomkl`.
+
 MUMPS and UMFPACK are sparse solvers. LAPACK CPU forms and factorizes a dense
 KKT matrix and should only be considered for small problems. The official
 [MadNLP linear-solver documentation](https://madsuite.org/MadNLP.jl/stable/)
 recommends sparse linear solvers once a problem exceeds 1,000 variables. HSL,
-Pardiso, and GPU backends need a custom `libMad` runtime and are outside this
-CPU benchmark.
+Panua PARDISO, HSL, and GPU backends need a custom `libMad` runtime. PARDISO
+MKL is included only in the experimental x86-64 runtime variant.
 
 ### Exploratory macOS results
 

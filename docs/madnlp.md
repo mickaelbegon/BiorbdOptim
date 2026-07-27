@@ -37,22 +37,33 @@ the CasADi plugin validates its name and type when it constructs the solver.
 
 ## Linear solvers
 
-The CPU `libMad` runtime used by CasADi exposes three relevant backends:
+The base CPU `libMad` runtime used by CasADi exposes three backends:
 
 - `mumps` (default): sparse symmetric-indefinite factorization with inertia;
 - `umfpack`: sparse LU factorization, used by MadNLP in inertia-free mode;
 - `lapack_cpu`: dense Bunch-Kaufman factorization, intended only for small
   dense KKT systems.
 
+An x86-64 runtime compiled with `MadNLPPardiso` can additionally expose
+`pardiso_mkl`, which Bioptim maps to `PardisoMKLSolver`. This backend uses
+Intel oneMKL, remains sparse, and reports the KKT inertia to MadNLP. It is not
+available on native ARM platforms.
+
 Select one with `solver.set_linear_solver(...)`. Bioptim translates these
 lowercase aliases to the Julia type names required by `libMad`
-(`MumpsSolver`, `UmfpackSolver`, and `LapackCPUSolver`). Passing the lowercase
+(`MumpsSolver`, `UmfpackSolver`, `LapackCPUSolver`, and
+`PardisoMKLSolver`). Passing the lowercase
 values directly through `set_option_unsafe` is not equivalent: current
 `libMad` builds warn and silently retain MUMPS.
 
-MadNLP also supports HSL, Pardiso, and GPU linear solvers in its Julia
-packages, but they are not exposed by the CPU `libMad` runtime validated here.
-They require a separately compiled runtime before Bioptim can select them.
+The selected `libMad` must contain `MadNLPPardiso`; otherwise older runtimes
+warn and silently retain MUMPS. Verify the MadNLP banner in deployment tests.
+
+MadNLP also supports the Panua `PardisoSolver`, HSL, and GPU linear solvers in
+its Julia packages. They require a separately compiled runtime before Bioptim
+can select them. HSL backends additionally require a compatible libHSL and
+`JULIA_HSL_LIBRARY_PATH` at runtime; an arbitrary `libcoinhsl` built for IPOPT
+is not necessarily ABI-compatible with the Julia `HSL.jl` wrapper.
 
 Warm-start primal values and multipliers are passed through the standard
 `x0`, `lam_x0`, and `lam_g0` nlpsol inputs, with `dual_initialized` enabled.

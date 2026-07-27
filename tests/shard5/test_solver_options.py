@@ -57,6 +57,9 @@ def test_madnlp_solver_options(monkeypatch):
         ("lapack", "LapackCPUSolver"),
         ("lapack_cpu", "LapackCPUSolver"),
         ("LapackCPUSolver", "LapackCPUSolver"),
+        ("pardiso_mkl", "PardisoMKLSolver"),
+        ("pardisomkl", "PardisoMKLSolver"),
+        ("PardisoMKLSolver", "PardisoMKLSolver"),
     ),
 )
 def test_madnlp_linear_solver_aliases(monkeypatch, value, expected):
@@ -69,7 +72,7 @@ def test_madnlp_linear_solver_aliases(monkeypatch, value, expected):
 def test_madnlp_rejects_unknown_linear_solver(monkeypatch):
     monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
     solver = Solver.MADNLP()
-    with pytest.raises(ValueError, match="MUMPS, UMFPACK, or LAPACK CPU"):
+    with pytest.raises(ValueError, match="MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL"):
         solver.set_linear_solver("ma57")
 
 
@@ -98,6 +101,8 @@ def test_ipopt_solver_options():
     assert solver.hessian_approximation == "exact"
     assert solver.limited_memory_max_history == 50
     assert solver.linear_solver == "mumps"
+    assert solver.hsl_library is None
+    assert solver.pardiso_library is None
     assert solver.nlp_scaling_method == "gradient-based"
     assert solver.mu_init == 0.1
     assert solver.warm_start_init_point == "no"
@@ -114,6 +119,10 @@ def test_ipopt_solver_options():
 
     solver.set_linear_solver("ma57")
     assert solver.linear_solver == "ma57"
+    solver.set_hsl_library("/opt/hsl/libhsl.so")
+    assert solver.hsl_library == "/opt/hsl/libhsl.so"
+    solver.set_pardiso_library("/opt/pardiso/libpardiso.so")
+    assert solver.pardiso_library == "/opt/pardiso/libpardiso.so"
     solver.set_tol(2)
     assert solver.tol == 2
     solver.set_dual_inf_tol(3)
@@ -193,6 +202,8 @@ def test_ipopt_solver_options():
     solver_dict = solver.as_dict(fake_solver)
     assert solver_dict["ipopt.casino_gain"] == 777
     assert solver_dict["ipopt.tol"] == 21
+    assert solver_dict["ipopt.hsllib"] == "/opt/hsl/libhsl.so"
+    assert solver_dict["ipopt.pardisolib"] == "/opt/pardiso/libpardiso.so"
     assert not "_c_compile" in solver_dict
     assert not "type" in solver_dict
     assert not "show_online_optim" in solver_dict

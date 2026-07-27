@@ -30,6 +30,9 @@ MADNLP_LINEAR_SOLVERS = {
     "lapack": "LapackCPUSolver",
     "lapack_cpu": "LapackCPUSolver",
     "lapackcpusolver": "LapackCPUSolver",
+    "pardiso_mkl": "PardisoMKLSolver",
+    "pardisomkl": "PardisoMKLSolver",
+    "pardisomklsolver": "PardisoMKLSolver",
 }
 
 
@@ -121,12 +124,12 @@ class MADNLP(GenericSolver):
         value, avoiding the runtime's silent fallback to MUMPS.
         """
         if not isinstance(value, str):
-            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, or LAPACK CPU")
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL")
         key = value.replace("-", "_").replace(" ", "_").lower()
         try:
             self._linear_solver = MADNLP_LINEAR_SOLVERS[key]
         except KeyError as error:
-            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, or LAPACK CPU") from error
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL") from error
 
     def set_warm_start_options(self, val: Float = 1e-10) -> None:
         """Enable use of multipliers supplied through CasADi's standard nlpsol inputs."""

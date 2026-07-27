@@ -102,6 +102,9 @@ def make_solver(
     max_iterations: int,
     acados_dir: str | None,
     madnlp_linear_solver: str | None = None,
+    ipopt_linear_solver: str | None = None,
+    ipopt_hsl_library: str | None = None,
+    ipopt_pardiso_library: str | None = None,
 ):
     factories = {
         "ipopt": Solver.IPOPT,
@@ -116,6 +119,13 @@ def make_solver(
     solver.set_print_level("ERROR" if name == "madnlp" else 0)
     if name == "madnlp" and madnlp_linear_solver is not None:
         solver.set_linear_solver(madnlp_linear_solver)
+    if name == "ipopt":
+        if ipopt_linear_solver is not None:
+            solver.set_linear_solver(ipopt_linear_solver)
+        if ipopt_hsl_library is not None:
+            solver.set_hsl_library(ipopt_hsl_library)
+        if ipopt_pardiso_library is not None:
+            solver.set_pardiso_library(ipopt_pardiso_library)
     if name == "acados" and acados_dir:
         solver.set_acados_dir(acados_dir)
     return solver
@@ -232,14 +242,30 @@ def run_once(
     max_iterations: int,
     acados_dir: str | None,
     madnlp_linear_solver: str | None = None,
+    ipopt_linear_solver: str | None = None,
+    ipopt_hsl_library: str | None = None,
+    ipopt_pardiso_library: str | None = None,
 ) -> RunResult:
-    selected_linear_solver = madnlp_linear_solver if solver_name == "madnlp" else None
+    selected_linear_solver = (
+        madnlp_linear_solver
+        if solver_name == "madnlp"
+        else ipopt_linear_solver if solver_name == "ipopt" else None
+    )
     try:
         start = time.perf_counter()
         ocp = prepare_case(case, n_shooting)
         build_s = time.perf_counter() - start
-        solver = make_solver(solver_name, tolerance, max_iterations, acados_dir, madnlp_linear_solver)
-        selected_linear_solver = solver.linear_solver if solver_name == "madnlp" else None
+        solver = make_solver(
+            solver_name,
+            tolerance,
+            max_iterations,
+            acados_dir,
+            madnlp_linear_solver,
+            ipopt_linear_solver,
+            ipopt_hsl_library,
+            ipopt_pardiso_library,
+        )
+        selected_linear_solver = solver.linear_solver if solver_name in ("madnlp", "ipopt") else None
 
         start = time.perf_counter()
         solution = ocp.solve(solver)
@@ -390,9 +416,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
         "--madnlp-linear-solver",
-        choices=("mumps", "umfpack", "lapack_cpu"),
+        choices=("mumps", "umfpack", "lapack_cpu", "pardiso_mkl"),
         default="mumps",
         help="MadNLP linear solver. Run each backend in a fresh process for comparable cold timings.",
+    )
+    parser.add_argument(
+        "--ipopt-linear-solver",
+        choices=("mumps", "ma57", "pardiso", "pardisomkl"),
+        default="mumps",
+        help="IPOPT linear solver. Availability depends on the IPOPT build and external shared libraries.",
+    )
+    parser.add_argument("--ipopt-hsl-library", help="Path to libhsl/coinhsl for IPOPT's hsllib option.")
+    parser.add_argument(
+        "--ipopt-pardiso-library",
+        help="Path to the Panua PARDISO shared library for IPOPT's pardisolib option.",
     )
     parser.add_argument("--acados-dir")
     parser.add_argument("--output", type=Path)
@@ -419,6 +456,9 @@ def main(argv: list[str] | None = None) -> int:
         "tolerance": args.tolerance,
         "max_iterations": args.max_iterations,
         "madnlp_linear_solver": args.madnlp_linear_solver,
+        "ipopt_linear_solver": args.ipopt_linear_solver,
+        "ipopt_hsl_library": args.ipopt_hsl_library,
+        "ipopt_pardiso_library": args.ipopt_pardiso_library,
     }
     rows: list[RunResult] = []
     for case in args.cases:
@@ -430,7 +470,11 @@ def main(argv: list[str] | None = None) -> int:
                         RunResult(
                             case=case,
                             solver=solver_name,
-                            linear_solver=args.madnlp_linear_solver if solver_name == "madnlp" else None,
+                            linear_solver=(
+                                args.madnlp_linear_solver
+                                if solver_name == "madnlp"
+                                else args.ipopt_linear_solver if solver_name == "ipopt" else None
+                            ),
                             n_shooting=n_shooting,
                             repetition=0,
                             temperature="n/a",
@@ -451,6 +495,9 @@ def main(argv: list[str] | None = None) -> int:
                             args.max_iterations,
                             args.acados_dir,
                             args.madnlp_linear_solver,
+                            args.ipopt_linear_solver,
+                            args.ipopt_hsl_library,
+                            args.ipopt_pardiso_library,
                         )
                         rows.append(warmup_result)
                         if warmup_result.outcome != "success":
@@ -467,6 +514,9 @@ def main(argv: list[str] | None = None) -> int:
                                 args.max_iterations,
                                 args.acados_dir,
                                 args.madnlp_linear_solver,
+                                args.ipopt_linear_solver,
+                                args.ipopt_hsl_library,
+                                args.ipopt_pardiso_library,
                             )
                             for repetition in range(1, args.repetitions + 1)
                         )
@@ -482,6 +532,9 @@ def main(argv: list[str] | None = None) -> int:
                             args.max_iterations,
                             args.acados_dir,
                             args.madnlp_linear_solver,
+                            args.ipopt_linear_solver,
+                            args.ipopt_hsl_library,
+                            args.ipopt_pardiso_library,
                         )
                         for repetition in range(1, args.repetitions + 1)
                     )
