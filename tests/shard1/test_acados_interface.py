@@ -7,6 +7,7 @@ It tests the results of an optimal control problem with acados regarding the pro
 import os
 import shutil
 from sys import platform
+from unittest.mock import patch
 
 import numpy as np
 import numpy.testing as npt
@@ -53,6 +54,63 @@ def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
     assert acados_ocp.code_gen_options.acados_lib_path == str(acados_root / "lib")
     assert acados_ocp.code_gen_options.code_export_directory == str(generated_code)
     assert acados_ocp.code_gen_options.json_file == "acados_ocp.json"
+
+
+def test_acados_v055_code_reuse_and_reset(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    generated_code = tmp_path / "generated_code"
+
+    def solve_ocp():
+        ocp = ocp_module.prepare_ocp(
+            biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+            n_shooting=10,
+            tf=2,
+            expand_dynamics=True,
+        )
+        solver = Solver.ACADOS()
+        solver.set_acados_model_name("bioptim_code_reuse")
+        solver.set_c_generated_code_path(str(generated_code))
+        solver.set_check_reuse_possible(True)
+        ocp.solve(solver=solver)
+        return ocp, solver
+
+    first_ocp, _ = solve_ocp()
+    assert first_ocp.ocp_solver.ocp_solver.generated
+
+    reused_ocp, reused_solver = solve_ocp()
+    assert not reused_ocp.ocp_solver.ocp_solver.generated
+
+    reused_solver.set_reset_solver_before_solve(True)
+    reset_method = reused_ocp.ocp_solver.ocp_solver.reset
+    with patch.object(reused_ocp.ocp_solver.ocp_solver, "reset", wraps=reset_method) as reset_mock:
+        reused_ocp.solve(solver=reused_solver)
+        reset_mock.assert_called_once_with()
+
+
+def test_acados_v055_code_reuse_requires_stable_model_name():
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=10,
+        tf=2,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+    solver.set_check_reuse_possible(True)
+
+    with pytest.raises(RuntimeError, match="code reuse requires a stable model name"):
+        ocp.solve(solver=solver)
 
 
 @pytest.mark.parametrize("cost_type", ["LINEAR_LS", "NONLINEAR_LS"])

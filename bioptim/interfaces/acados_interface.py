@@ -221,7 +221,12 @@ class AcadosInterface(SolverInterface):
         self.acados_model.con_h_expr_e = np.zeros((0, 0))
         self.acados_model.p = []
         if not self.opts.acados_model_name:
-            if self.opts.c_compile:
+            if self.opts.check_reuse_possible:
+                raise RuntimeError(
+                    "Acados code reuse requires a stable model name. "
+                    "Please call Solver.ACADOS.set_acados_model_name(...)."
+                )
+            elif self.opts.c_compile:
                 now = datetime.now()  # current date and time
                 self.acados_model.name = f"model_{now.strftime('%Y_%m_%d_%H%M%S%f')[:-4]}"
             else:
@@ -939,8 +944,10 @@ class AcadosInterface(SolverInterface):
             self.ocp_solver = AcadosOcpSolver(
                 self.acados_ocp,
                 json_file=self.acados_ocp.code_gen_options.json_file,
-                build=self.opts.c_compile,
-                check_reuse_possible=False,
+                build=False if self.opts.check_reuse_possible else self.opts.c_compile,
+                generate=not self.opts.check_reuse_possible,
+                check_reuse_possible=self.opts.check_reuse_possible,
+                tol_code_reuse=self.opts.tol_code_reuse,
             )
             self.opts.set_only_first_options_has_changed(False)
             self.opts.set_has_tolerance_changed(False)
@@ -951,6 +958,9 @@ class AcadosInterface(SolverInterface):
                     "Some options has been changed the second time acados was run.",
                     "Only " + str(Solver.ACADOS.get_tolerance_keys()) + " can be modified.",
                 )
+
+            if self.opts.reset_solver_before_solve:
+                self.ocp_solver.reset()
 
             if self.opts.has_tolerance_changed:
                 for key in self.opts.get_tolerance_keys():
