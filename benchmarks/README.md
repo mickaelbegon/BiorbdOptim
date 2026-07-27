@@ -65,7 +65,7 @@ Compare MadNLP's CPU linear solvers. Run each command in a fresh process so
 that every backend has its own cold initialization measurement:
 
 ```bash
-for linear_solver in mumps umfpack lapack_cpu; do
+for linear_solver in mumps umfpack; do
   python -m benchmarks.solver_benchmark \
     --cases cube \
     --solvers madnlp \
@@ -136,12 +136,31 @@ The IPOPT build still determines which names are valid. In particular, the
 macOS arm64 Conda build tested here is linked against OpenBLAS and accepts
 `pardiso` through the runtime loader, but not `pardisomkl`.
 
-MUMPS and UMFPACK are sparse solvers. LAPACK CPU forms and factorizes a dense
-KKT matrix and should only be considered for small problems. The official
+MUMPS and UMFPACK are sparse solvers. Panua PARDISO, HSL, and GPU backends need
+a custom `libMad` runtime. PARDISO MKL is included only in the experimental
+x86-64 runtime variant.
+
+### Why LAPACK CPU is excluded
+
+MadNLP's `LapackCPUSolver` remains useful for unit tests and very small dense
+NLPs, but it is deliberately excluded from this optimal-control benchmark.
+Direct multiple shooting and direct collocation produce large, sparse,
+block-structured KKT systems whose dimension grows with the number of shooting
+intervals, states, controls, algebraic variables, and constraints.
+
+Converting such a KKT system to a dense matrix discards this structure. Dense
+storage grows as \(O(n_\mathrm{KKT}^2)\), while a dense factorization grows as
+\(O(n_\mathrm{KKT}^3)\). Increasing the mesh can therefore turn a modest
+optimal-control problem into one that is limited by memory or factorization
+time, even when the dynamics and Hessian evaluations remain inexpensive.
+
+LAPACK CPU should consequently be restricted to tiny feasibility checks,
+backend validation, or problems known to have a genuinely dense and small KKT
+matrix. It should not be used to draw performance conclusions for realistic
+biomechanics or long-horizon optimal control. The official
 [MadNLP linear-solver documentation](https://madsuite.org/MadNLP.jl/stable/)
-recommends sparse linear solvers once a problem exceeds 1,000 variables. HSL,
-Panua PARDISO, HSL, and GPU backends need a custom `libMad` runtime. PARDISO
-MKL is included only in the experimental x86-64 runtime variant.
+recommends a sparse solver once the NLP exceeds 1,000 variables; in optimal
+control, exploiting sparsity is often worthwhile well before that threshold.
 
 ### Exploratory macOS results
 
@@ -154,20 +173,14 @@ one observation per cell, so small differences should be treated as ties.
 |---|---:|---|---:|---:|---:|---:|---:|---:|
 | Cube | 10 | MUMPS | 6.754 | **0.018** | 0.00162 | 11 | 1117.997245 | 7.55e-15 |
 | Cube | 10 | UMFPACK | **4.523** | **0.018** | **0.00148** | 11 | 1117.997245 | 1.78e-15 |
-| Cube | 10 | LAPACK CPU | 5.153 | 0.028 | 0.00305 | 11 | 1117.997245 | 1.78e-15 |
 | Pendulum | 100 | MUMPS | 6.644 | **1.964** | **0.425** | **48** | 36.096161 | 3.85e-13 |
 | Pendulum | 100 | UMFPACK | **6.620** | 2.384 | 0.760 | 71 | 36.096161 | 2.60e-09 |
-| Pendulum | 100 | LAPACK CPU | 8.555 | 4.630 | 1.970 | **48** | 36.096161 | 7.11e-15 |
 | Muscle fatigue | 20 | MUMPS | **14.417** | **5.846** | **5.200** | **94** | 17.326970 | 7.60e-10 |
 | Muscle fatigue | 20 | UMFPACK | 15.326 | 8.593 | 7.985 | 133 | 17.326969 | 3.55e-12 |
-| Muscle fatigue | 20 | LAPACK CPU | 160.030 | — | — | 94 | 17.326970 | 7.59e-10 |
 
-The LAPACK CPU hot run on `muscle_fatigue` was intentionally stopped after its
-cold solve took 160 seconds. On the two nontrivial sparse cases, MUMPS is the
-clear default: UMFPACK's inertia-free path needs 48% more iterations on the
-pendulum and 41% more on muscle fatigue. LAPACK preserves the MUMPS iteration
-count but its dense factorization makes the pendulum hot solve 2.4 times slower
-and the muscle-fatigue cold solve 11 times slower.
+On the two nontrivial sparse cases, MUMPS is the clear default: UMFPACK's
+inertia-free path needs 48% more iterations on the pendulum and 41% more on
+muscle fatigue.
 
 ## Reproducible Linux environment
 

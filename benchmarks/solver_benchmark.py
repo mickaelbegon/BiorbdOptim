@@ -416,7 +416,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
         "--madnlp-linear-solver",
-        choices=("mumps", "umfpack", "lapack_cpu", "pardiso_mkl"),
+        choices=("mumps", "umfpack", "pardiso_mkl"),
         default="mumps",
         help="MadNLP linear solver. Run each backend in a fresh process for comparable cold timings.",
     )
