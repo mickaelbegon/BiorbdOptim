@@ -172,7 +172,10 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
 
     # Solve the problem
     tic = perf_counter()
-    interface.out = {"sol": interface.shaked_ocp_solver.call(interface.limits)}
+    solver_limits = interface.limits
+    if hasattr(interface, "solver_call_limits"):
+        solver_limits = interface.solver_call_limits()
+    interface.out = {"sol": interface.shaked_ocp_solver.call(solver_limits)}
     stats = interface.shaked_ocp_solver.stats()
     madnlp_stats = stats.get("madnlp", {})
     interface.out["sol"]["solver_time_to_optimize"] = stats.get("t_wall_total", 0.0)

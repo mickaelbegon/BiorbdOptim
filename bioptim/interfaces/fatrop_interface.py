@@ -1,3 +1,6 @@
+from casadi import DM
+import numpy as np
+
 from .interface_utils import (
     generic_show_constraints_jacobian_sparsity,
     generic_solve,
@@ -98,6 +101,45 @@ class FatropInterface(SolverInterface):
         A reference to the solution
         """
         return generic_solve(self, expand_during_shake_tree)
+
+    def solver_call_limits(self) -> dict:
+        """Tighten interval bounds to compensate Fatrop's relative relaxation.
+
+        The original ``self.limits`` remain untouched so callers can audit the
+        returned point against the physical OCP bounds.
+        """
+
+        factor = self.opts.bound_tightening_factor
+        if factor == 0:
+            return self.limits
+
+        lower = np.asarray(self.limits["lbx"], dtype=float).reshape(-1)
+        upper = np.asarray(self.limits["ubx"], dtype=float).reshape(-1)
+        initial = np.asarray(self.limits["x0"], dtype=float).reshape(-1)
+        interval = lower < upper
+
+        tightened_lower = lower.copy()
+        tightened_upper = upper.copy()
+        finite_lower = interval & np.isfinite(lower)
+        finite_upper = interval & np.isfinite(upper)
+        tightened_lower[finite_lower] += factor * np.maximum(
+            1.0, np.abs(lower[finite_lower])
+        )
+        tightened_upper[finite_upper] -= factor * np.maximum(
+            1.0, np.abs(upper[finite_upper])
+        )
+        if np.any(tightened_lower > tightened_upper):
+            raise ValueError(
+                "Fatrop bound tightening exceeds at least one decision interval."
+            )
+
+        call_limits = dict(self.limits)
+        call_limits["lbx"] = DM(tightened_lower)
+        call_limits["ubx"] = DM(tightened_upper)
+        call_limits["x0"] = DM(
+            np.minimum(np.maximum(initial, tightened_lower), tightened_upper)
+        )
+        return call_limits
 
     def set_lagrange_multiplier(self, sol: Solution) -> None:
         """
