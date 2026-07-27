@@ -144,6 +144,29 @@ def test_ipopt_solver_options():
     assert solver.nlp_scaling_method == "gradient-fiesta"
 
 
+def test_acados_reuse_and_reset_options():
+    solver = Solver.ACADOS()
+
+    assert solver.check_reuse_possible is False
+    assert solver.tol_code_reuse == 1e-13
+    assert solver.reset_solver_before_solve is False
+
+    solver.set_reset_solver_before_solve(True)
+    assert solver.reset_solver_before_solve is True
+    assert solver.only_first_options_has_changed is False
+
+    solver.set_check_reuse_possible(True)
+    solver.set_tol_code_reuse(1e-10)
+    assert solver.check_reuse_possible is True
+    assert solver.tol_code_reuse == 1e-10
+    assert solver.only_first_options_has_changed is True
+
+    solver_dict = solver.as_dict(None)
+    assert "check_reuse_possible" not in solver_dict
+    assert "tol_code_reuse" not in solver_dict
+    assert "reset_solver_before_solve" not in solver_dict
+
+
 def test_generic_online_optim_skips_when_default_is_unavailable(monkeypatch):
     interface = FakeInterface(OnlineOptim.DEFAULT)
 
