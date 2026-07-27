@@ -113,6 +113,44 @@ def test_acados_v055_code_reuse_requires_stable_model_name():
         ocp.solve(solver=solver)
 
 
+@pytest.mark.parametrize("solver_mode", ["ANDERSON", "SQP_WITH_FEASIBLE_QP"])
+def test_acados_v055_solver_modes(solver_mode):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=10,
+        tf=2,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+
+    if solver_mode == "ANDERSON":
+        solver.set_with_anderson_acceleration(True)
+        solver.set_anderson_activation_threshold(10.0)
+    else:
+        solver.set_nlp_solver_type("SQP_WITH_FEASIBLE_QP")
+        solver.set_byrd_omojokon_slack_relaxation_factor(1.01)
+
+    sol = ocp.solve(solver=solver)
+    assert sol.status == 0
+
+    acados_options = ocp.ocp_solver.acados_ocp.solver_options
+    if solver_mode == "ANDERSON":
+        assert acados_options.with_anderson_acceleration is True
+        assert acados_options.anderson_activation_threshold == 10.0
+    else:
+        assert acados_options.nlp_solver_type == "SQP_WITH_FEASIBLE_QP"
+        assert acados_options.byrd_omojokon_slack_relaxation_factor == 1.01
+
+    os.remove("./acados_ocp.json")
+    shutil.rmtree("./c_generated_code/")
+
+
 @pytest.mark.parametrize("cost_type", ["LINEAR_LS", "NONLINEAR_LS"])
 def test_acados_no_obj(cost_type):
     if platform == "win32":
