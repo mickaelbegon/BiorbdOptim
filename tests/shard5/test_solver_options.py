@@ -167,6 +167,28 @@ def test_acados_reuse_and_reset_options():
     assert "reset_solver_before_solve" not in solver_dict
 
 
+def test_acados_v055_solver_mode_options():
+    solver = Solver.ACADOS()
+
+    assert solver.with_anderson_acceleration is False
+    assert solver.anderson_activation_threshold == 10.0
+    assert solver.byrd_omojokon_slack_relaxation_factor == 1.00001
+
+    solver.set_with_anderson_acceleration(True)
+    solver.set_anderson_activation_threshold(5.0)
+    solver.set_byrd_omojokon_slack_relaxation_factor(1.01)
+
+    assert solver.with_anderson_acceleration is True
+    assert solver.anderson_activation_threshold == 5.0
+    assert solver.byrd_omojokon_slack_relaxation_factor == 1.01
+    assert solver.only_first_options_has_changed is True
+
+    solver_dict = solver.as_dict(None)
+    assert solver_dict["with_anderson_acceleration"] is True
+    assert solver_dict["anderson_activation_threshold"] == 5.0
+    assert solver_dict["byrd_omojokon_slack_relaxation_factor"] == 1.01
+
+
 def test_generic_online_optim_skips_when_default_is_unavailable(monkeypatch):
     interface = FakeInterface(OnlineOptim.DEFAULT)
 

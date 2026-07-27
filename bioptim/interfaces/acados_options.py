@@ -29,7 +29,8 @@ class ACADOS(GenericSolver):
     ----------
     _qp_solver: str
         QP solver to be used in the NLP solver. String in (‘PARTIAL_CONDENSING_HPIPM’, ‘FULL_CONDENSING_QPOASES’,
-        ‘FULL_CONDENSING_HPIPM’, ‘PARTIAL_CONDENSING_QPDUNES’, ‘PARTIAL_CONDENSING_OSQP’).
+        ‘FULL_CONDENSING_HPIPM’, ‘PARTIAL_CONDENSING_QPDUNES’, ‘PARTIAL_CONDENSING_OSQP’,
+        ‘PARTIAL_CONDENSING_CLARABEL’, ‘FULL_CONDENSING_DAQP’).
         Default: ‘PARTIAL_CONDENSING_HPIPM’
     _hessian_approx: str
         Hessian approximation.
@@ -77,6 +78,12 @@ class ACADOS(GenericSolver):
         Absolute tolerance used by Acados when comparing formulations for code reuse.
     _reset_solver_before_solve: bool
         If Acados should reset its iterates and QP memory before repeated solves.
+    _with_anderson_acceleration: bool
+        If Anderson acceleration should be enabled for fixed-step SQP.
+    _anderson_activation_threshold: float
+        KKT residual threshold below which Anderson acceleration is activated.
+    _byrd_omojokon_slack_relaxation_factor: float
+        Slack relaxation factor used by ``SQP_WITH_FEASIBLE_QP``.
     """
 
     type: SolverType = SolverType.ACADOS
@@ -104,6 +111,9 @@ class ACADOS(GenericSolver):
     _check_reuse_possible: Bool = False
     _tol_code_reuse: Float = 1e-13
     _reset_solver_before_solve: Bool = False
+    _with_anderson_acceleration: Bool = False
+    _anderson_activation_threshold: Float = 1e1
+    _byrd_omojokon_slack_relaxation_factor: Float = 1.00001
 
     @property
     def qp_solver(self) -> Str:
@@ -324,6 +334,18 @@ class ACADOS(GenericSolver):
     def reset_solver_before_solve(self) -> Bool:
         return self._reset_solver_before_solve
 
+    @property
+    def with_anderson_acceleration(self) -> Bool:
+        return self._with_anderson_acceleration
+
+    @property
+    def anderson_activation_threshold(self) -> Float:
+        return self._anderson_activation_threshold
+
+    @property
+    def byrd_omojokon_slack_relaxation_factor(self) -> Float:
+        return self._byrd_omojokon_slack_relaxation_factor
+
     def set_print_level(self, num: int) -> None:
         self._print_level = num
         self.set_only_first_options_has_changed(True)
@@ -355,6 +377,21 @@ class ACADOS(GenericSolver):
     def set_reset_solver_before_solve(self, val: Bool) -> None:
         """Reset Acados' iterates and QP memory before every repeated solve."""
         self._reset_solver_before_solve = val
+
+    def set_with_anderson_acceleration(self, val: Bool) -> None:
+        """Enable depth-one Anderson acceleration for fixed-step SQP."""
+        self._with_anderson_acceleration = val
+        self.set_only_first_options_has_changed(True)
+
+    def set_anderson_activation_threshold(self, val: Float) -> None:
+        """Set the KKT residual threshold that activates Anderson acceleration."""
+        self._anderson_activation_threshold = val
+        self.set_only_first_options_has_changed(True)
+
+    def set_byrd_omojokon_slack_relaxation_factor(self, val: Float) -> None:
+        """Set the slack relaxation factor used by ``SQP_WITH_FEASIBLE_QP``."""
+        self._byrd_omojokon_slack_relaxation_factor = val
+        self.set_only_first_options_has_changed(True)
 
     @staticmethod
     def get_tolerance_keys() -> StrList:
