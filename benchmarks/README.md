@@ -99,6 +99,21 @@ python -m benchmarks.solver_benchmark \
   --repetitions 3
 ```
 
+The
+[`MadNLP PARDISO benchmark`](../.github/workflows/madnlp_pardiso_benchmark.yml)
+workflow makes this comparison reproducible on Linux. It compiles the pinned
+`mickaelbegon/libMad` PARDISO branch, builds CasADi 3.8 against that runtime,
+and runs both MUMPS and PARDISO MKL on the same nine-case matrix used for the
+complete solver benchmark. Each case/backend pair runs in a fresh process, with
+one cold solve followed by three measured hot solves. MKL, OpenMP, and OpenBLAS
+are restricted to one thread.
+
+CasADi 3.7.2's older MadNLP plugin uses the `madnlp_c_*` API and cannot load
+this `libMad` runtime by merely changing `LD_LIBRARY_PATH`. CasADi must be
+compiled against the newer `libmad_*` interface, which is why the workflow
+builds the pinned CasADi 3.8 source instead of using the earlier benchmark
+wheel.
+
 IPOPT supports two distinct PARDISO interfaces. A build linked against Intel
 oneMKL accepts `pardisomkl`:
 
