@@ -86,7 +86,7 @@ done
 ```
 
 With an x86-64 `libMad` runtime compiled with `MadNLPPardiso`, benchmark
-PARDISO MKL in a fresh process:
+one of the three PARDISO MKL profiles in a fresh process:
 
 ```bash
 MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \
@@ -94,19 +94,28 @@ python -m benchmarks.solver_benchmark \
   --cases pendulum muscle_fatigue \
   --solvers madnlp \
   --sizes 100 \
-  --madnlp-linear-solver pardiso_mkl \
+  --madnlp-pardiso-profile robust \
   --warmups 1 \
   --repetitions 3
 ```
+
+The profiles are:
+
+- `baseline`: upstream `MadNLPPardiso.PardisoMKLSolver`;
+- `robust`: the libMad `RobustPardisoMKLSolver`, with 1e-8 tiny-pivot
+  perturbation, scaling, symmetric weighted matching, automatic refinement,
+  sparse-matrix validation, and up to two iterative-refinement steps;
+- `robust_inertia_free`: the same robust PARDISO factorization with MadNLP's
+  inertia-free correction and 1e-8 initial primal and dual regularization.
 
 The
 [`MadNLP PARDISO benchmark`](../.github/workflows/madnlp_pardiso_benchmark.yml)
 workflow makes this comparison reproducible on Linux. It compiles the pinned
 `mickaelbegon/libMad` PARDISO branch, builds CasADi 3.8 against that runtime,
-and runs both MUMPS and PARDISO MKL on the same nine-case matrix used for the
-complete solver benchmark. Each case/backend pair runs in a fresh process, with
-one cold solve followed by three measured hot solves. MKL, OpenMP, and OpenBLAS
-are restricted to one thread.
+and runs MUMPS plus all three PARDISO MKL profiles on the same nine-case matrix
+used for the complete solver benchmark. Each case/backend pair runs in a fresh
+process, with one cold solve followed by three measured hot solves. MKL,
+OpenMP, and OpenBLAS are restricted to one thread.
 
 CasADi 3.7.2's older MadNLP plugin uses the `madnlp_c_*` API and cannot load
 this `libMad` runtime by merely changing `LD_LIBRARY_PATH`. CasADi must be
@@ -114,59 +123,90 @@ compiled against the newer `libmad_*` interface, which is why the workflow
 builds the pinned CasADi 3.8 source instead of using the earlier benchmark
 wheel.
 
-### Linux MUMPS versus PARDISO MKL results
+### Linux MUMPS and PARDISO profile results
 
 These measurements come from
-[GitHub Actions run 30317721535](https://github.com/mickaelbegon/BiorbdOptim/actions/runs/30317721535)
+[GitHub Actions run 30322800572](https://github.com/mickaelbegon/BiorbdOptim/actions/runs/30322800572)
 on 2026-07-28 (Ubuntu 24.04 x86-64, CasADi 3.8.0, one thread). Each row has one
 cold solve in a fresh Python process and the median of three hot solves after
-that first solve. A hot solve is not an OCP warm start. Both backends use the
-same MadNLP configuration and variable ordering.
+that first solve. A hot solve is not an OCP warm start. All four configurations
+use the same MadNLP tolerance, iteration limit, and variable ordering.
 
-| Case | Shooting | Linear solver | Cold solve (s) | Hot solve (s) | Hot solver (s) | Hot iter. | Cost | Max violation | Outcome |
+For successful rows, `Iter.` is the median hot iteration count. For failed
+rows, it is the final iteration of the cold attempt when one is available.
+
+| Case | Shooting | Linear solver/profile | Cold solve (s) | Hot solve (s) | Hot solver (s) | Iter. | Cost | Max violation | Outcome |
 |---|---:|---|---:|---:|---:|---:|---:|---:|---|
-| Pendulum | 20 | MUMPS | **8.745** | **0.718** | 0.154 | 24 | 68.046875 | 3.37e-13 | success |
-| Pendulum | 20 | PARDISO MKL | 8.770 | 0.719 | **0.151** | 24 | 68.046875 | 2.75e-13 | success |
-| Pendulum | 500 | MUMPS | 64.129 | 55.436 | 39.902 | 247 | 35.664490 | 1.85e-09 | success |
-| Pendulum | 500 | PARDISO MKL | **53.594** | **43.106** | **27.491** | **173** | 35.664490 | 1.28e-10 | success |
-| Cube | 10 | MUMPS | 7.930 | 0.031 | 0.0027 | 11 | 1117.997245 | 8.88e-15 | success |
-| Cube | 10 | PARDISO MKL | **7.924** | **0.031** | **0.0017** | 11 | 1117.997245 | 6.29e-12 | success |
-| Static arm | 10 | MUMPS | **45.463** | 37.734 | 16.390 | 67 | 330.979936 | 2.24e-08 | success |
-| Static arm | 10 | PARDISO MKL | 47.600 | **37.677** | **16.301** | 67 | 330.979936 | 2.24e-08 | success |
-| Free time | 10 | MUMPS | 10.616 | 0.874 | 0.720 | 94 | 1137.695623 | 9.97e-09 | success |
-| Free time | 10 | PARDISO MKL | — | — | — | — | — | — | runtime failure |
-| Multiphase | 10/phase | MUMPS | 8.281 | 0.377 | 0.076 | 10 | 33846.126974 | 4.88e-15 | success |
-| Multiphase | 10/phase | PARDISO MKL | — | — | — | 96 | 47845.924008 | 2.36e-12 | solver failure |
-| Contact inequalities | 10 | MUMPS | **19.146** | **9.319** | **8.660** | **69** | 0.151329 | 2.73e-12 | success |
-| Contact inequalities | 10 | PARDISO MKL | 20.541 | 10.741 | 10.114 | 79 | 0.151329 | 3.51e-14 | success |
-| Holonomic muscle | 5 | MUMPS | **41.582** | 33.660 | 28.536 | 26 | 0.013516 | 7.15e-07 | success |
-| Holonomic muscle | 5 | PARDISO MKL | 41.614 | **32.222** | **27.232** | 26 | 0.013516 | 7.15e-07 | success |
-| Muscle fatigue | 50 | MUMPS | **29.372** | **21.386** | **19.912** | **64** | 17.288824 | 2.77e-08 | success |
-| Muscle fatigue | 50 | PARDISO MKL | 53.371 | 45.356 | 43.897 | 123 | 17.288824 | 2.73e-08 | success |
+| Pendulum | 20 | MUMPS | 8.885 | 0.744 | 0.156 | 24 | 68.046875 | 3.37e-13 | success |
+| Pendulum | 20 | PARDISO baseline | 9.000 | 0.747 | 0.153 | 24 | 68.046875 | 2.75e-13 | success |
+| Pendulum | 20 | PARDISO robust | **8.811** | **0.731** | **0.152** | 24 | 68.046875 | 3.29e-14 | success |
+| Pendulum | 20 | PARDISO robust inertia-free | 9.279 | 0.828 | 0.256 | 41 | 68.046875 | 1.12e-12 | success |
+| Pendulum | 500 | MUMPS | 63.952 | 55.852 | 40.081 | 247 | 35.664490 | 1.85e-09 | success |
+| Pendulum | 500 | PARDISO baseline | **53.488** | **43.018** | **27.226** | **173** | 35.664490 | 1.28e-10 | success |
+| Pendulum | 500 | PARDISO robust | 53.683 | 43.408 | 27.635 | 174 | 35.664490 | 1.30e-10 | success |
+| Pendulum | 500 | PARDISO robust inertia-free | 111.829 | — | — | 500 | 35.839803 | 5.80e-02 | maximum iterations |
+| Cube | 10 | MUMPS | **7.896** | 0.032 | 0.0028 | 11 | 1117.997245 | 8.88e-15 | success |
+| Cube | 10 | PARDISO baseline | 7.969 | **0.031** | **0.0020** | 11 | 1117.997245 | 6.29e-12 | success |
+| Cube | 10 | PARDISO robust | 7.991 | 0.031 | 0.0023 | 11 | 1117.997245 | 1.78e-15 | success |
+| Cube | 10 | PARDISO robust inertia-free | 8.481 | 0.032 | 0.0027 | 11 | 1117.997245 | 4.85e-12 | success |
+| Static arm | 10 | MUMPS | 46.023 | 37.481 | 16.392 | 67 | 330.979936 | 2.24e-08 | success |
+| Static arm | 10 | PARDISO baseline | 45.645 | 37.269 | 16.350 | 67 | 330.979936 | 2.24e-08 | success |
+| Static arm | 10 | PARDISO robust | 45.551 | 37.882 | 16.375 | 67 | 330.979936 | 2.24e-08 | success |
+| Static arm | 10 | PARDISO robust inertia-free | **44.644** | **36.139** | **14.964** | **61** | 330.979936 | 7.96e-10 | success |
+| Free time | 10 | MUMPS | 10.852 | 0.914 | 0.772 | 94 | 1137.695623 | 9.97e-09 | success |
+| Free time | 10 | PARDISO baseline | — | — | — | — | — | — | runtime failure |
+| Free time | 10 | PARDISO robust | 10.763 | 1.053 | 0.904 | 113 | 109.838911 | 9.91e-09 | success, different optimum |
+| Free time | 10 | PARDISO robust inertia-free | — | — | — | — | — | — | runtime failure |
+| Multiphase | 10/phase | MUMPS | **8.407** | 0.389 | 0.092 | 10 | 33846.126974 | 4.88e-15 | success |
+| Multiphase | 10/phase | PARDISO baseline | 11.097 | — | — | 96 | 47845.924008 | 2.36e-12 | dual infeasibility |
+| Multiphase | 10/phase | PARDISO robust | 10.981 | — | — | 96 | 47845.924009 | 2.36e-12 | dual infeasibility |
+| Multiphase | 10/phase | PARDISO robust inertia-free | 8.686 | **0.379** | **0.080** | 10 | 33846.126974 | 2.84e-13 | success |
+| Contact inequalities | 10 | MUMPS | **19.132** | **9.293** | **8.634** | **69** | 0.151329 | 2.73e-12 | success |
+| Contact inequalities | 10 | PARDISO baseline | 20.560 | 10.853 | 10.190 | 79 | 0.151329 | 3.51e-14 | success |
+| Contact inequalities | 10 | PARDISO robust | 21.675 | 11.919 | 11.282 | 88 | 0.151329 | 3.13e-14 | success |
+| Contact inequalities | 10 | PARDISO robust inertia-free | 29.098 | 19.075 | 18.414 | 143 | 0.151329 | 3.49e-14 | success |
+| Holonomic muscle | 5 | MUMPS | 42.386 | 34.177 | 28.889 | 26 | 0.013516 | 7.15e-07 | success |
+| Holonomic muscle | 5 | PARDISO baseline | 42.432 | 34.073 | 28.920 | 26 | 0.013516 | 7.15e-07 | success |
+| Holonomic muscle | 5 | PARDISO robust | **42.305** | 34.061 | 28.944 | 26 | 0.013516 | 7.15e-07 | success |
+| Holonomic muscle | 5 | PARDISO robust inertia-free | 42.410 | **32.446** | **27.408** | 26 | 0.013516 | 7.21e-07 | success |
+| Muscle fatigue | 50 | MUMPS | **29.247** | **20.774** | **19.310** | 64 | 17.288824 | 2.77e-08 | success |
+| Muscle fatigue | 50 | PARDISO baseline | 52.419 | 44.958 | 43.497 | 123 | 17.288824 | 2.73e-08 | success |
+| Muscle fatigue | 50 | PARDISO robust | 31.392 | 23.544 | 22.072 | **63** | 17.288824 | 2.59e-08 | success |
+| Muscle fatigue | 50 | PARDISO robust inertia-free | 53.484 | 45.016 | 43.544 | 142 | 17.294685 | 7.76e-08 | success, cost differs |
 
-PARDISO is not a general replacement for MUMPS in this matrix:
+The profiles make different robustness/performance trade-offs:
 
-- MUMPS succeeds on all nine cases; PARDISO succeeds on seven. PARDISO raises
-  a `MadNLPError` on `free_time` and stops after 96 iterations with large dual
-  infeasibility on `multiphase`.
-- On the seven common successes, PARDISO's summed hot wall time is 7.3% higher
-  and its summed hot solver time is 10.2% higher. Its summed cold time is 7.9%
-  higher. The muscle-fatigue case drives this regression.
-- Without muscle fatigue, PARDISO's summed hot wall and solver times are 9.1%
-  and 13.2% lower, respectively. The clearest win is the 500-interval pendulum:
-  22.2% less hot wall time, 31.1% less hot solver time, and 173 instead of 247
-  iterations.
-- On muscle fatigue, PARDISO takes 45.356 s hot versus 21.386 s for MUMPS and
-  123 versus 64 iterations. A faster factorization cannot compensate for the
-  different numerical trajectory in this Hessian-heavy problem.
+- MUMPS succeeds on all nine cases and remains the robust default. Baseline
+  PARDISO succeeds on seven, robust PARDISO on eight, and robust inertia-free
+  PARDISO on seven. The two robust profiles are complementary rather than
+  ordered: `robust` recovers `free_time`, while `robust_inertia_free` recovers
+  `multiphase` but fails on `free_time` and the 500-interval pendulum.
+- On the seven successful cases shared by baseline and robust PARDISO, all with
+  matching costs, the robust profile reduces summed cold wall time by 8.7%,
+  hot wall time by 11.3%, and hot solver time by 15.7%. Most of this improvement
+  comes from the Hessian-heavy muscle-fatigue case: 23.544 s hot and 63
+  iterations instead of 44.958 s and 123 iterations for baseline. MUMPS is
+  still faster there at 20.774 s and 64 iterations.
+- On the seven cost-equivalent successes shared by robust PARDISO and MUMPS,
+  robust PARDISO is 2.8% faster cold, 4.3% faster hot, and 6.2% faster in
+  reported solver time in aggregate. The main sparse-KKT win is the
+  500-interval pendulum: about 22% less hot wall time and 31% less solver time
+  than MUMPS. Robust PARDISO is slower on the contact-inequality and
+  muscle-fatigue cases.
+- The robust `free_time` solution is feasible but has cost 109.838911 versus
+  1137.695623 for MUMPS. This is a different, substantially lower local
+  solution, so its timing is not included in the like-for-like aggregate and
+  its trajectory should be inspected before treating the result as equivalent.
+- The inertia-free profile is useful as a targeted fallback for `multiphase`,
+  where it recovers the MUMPS cost and takes 0.379 s hot. It is not a good
+  general default: it reaches 500 iterations on the long pendulum, more than
+  doubles the contact hot time, and takes 142 iterations on muscle fatigue.
+  Its muscle-fatigue cost differs from MUMPS by 0.0339%.
 
-The successful solutions have matching costs at the displayed precision and
-acceptable constraint violations. MUMPS therefore remains the robust default.
-PARDISO MKL is a useful opt-in candidate for large sparse KKT systems, but it
-should be selected only after checking convergence and solution equivalence on
-the target formulation. These timings are from one runner series; the three hot
-repetitions reduce startup noise but do not characterize machine-to-machine
-variance.
+All other successful cost differences are below 0.01% and their maximum
+constraint violations remain below the requested `1e-6` tolerance. These
+timings are from one runner series; the three hot repetitions reduce startup
+noise but do not characterize machine-to-machine variance.
 
 IPOPT supports two distinct PARDISO interfaces. A build linked against Intel
 oneMKL accepts `pardisomkl`:
