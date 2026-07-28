@@ -40,6 +40,25 @@ _ACADOS_TIMING_FIELDS = (
 )
 
 
+def _get_acados_runtime_parameters(nlp) -> np.ndarray:
+    """Flatten Bioptim numerical time series in the same order as their symbolic variables."""
+
+    if nlp.numerical_data_timeseries is None:
+        return np.zeros((0, nlp.ns + 1))
+
+    runtime_parameters = []
+    for key, values in nlp.numerical_data_timeseries.items():
+        if values.ndim != 3 or values.shape[2] != nlp.ns + 1:
+            raise ValueError(
+                f"numerical_data_timeseries['{key}'] must have shape (n_values, n_components, {nlp.ns + 1}), "
+                f"got {values.shape}."
+            )
+        for component_index in range(values.shape[1]):
+            runtime_parameters.append(np.asarray(values[:, component_index, :], dtype=float))
+
+    return np.vstack(runtime_parameters) if runtime_parameters else np.zeros((0, nlp.ns + 1))
+
+
 def _safe_acados_stat(acados_solver: AcadosOcpSolver, field: Str, errors: dict) -> int | float | np.ndarray | None:
     """Read a diagnostic value without masking an otherwise usable solve."""
 
@@ -279,6 +298,7 @@ class AcadosInterface(SolverInterface):
         self.status = None
         self.out = {}
         self.real_time_to_optimize = -1
+        self._runtime_parameter_values = None
 
         self.all_constr = None
         self.end_constr = SX()
@@ -337,10 +357,10 @@ class AcadosInterface(SolverInterface):
         self.acados_model.x = x_sym
         self.acados_model.xdot = x_dot_sym
         self.acados_model.u = u_sym
+        self.acados_model.p = d
         self.acados_model.con_h_expr_0 = np.zeros((0, 0))
         self.acados_model.con_h_expr = np.zeros((0, 0))
         self.acados_model.con_h_expr_e = np.zeros((0, 0))
-        self.acados_model.p = []
         if not self.opts.acados_model_name:
             if self.opts.check_reuse_possible:
                 raise RuntimeError(
@@ -379,6 +399,8 @@ class AcadosInterface(SolverInterface):
         self.acados_ocp.dims.nx = ocp.nlp[0].parameters.shape + ocp.nlp[0].states.shape
         self.acados_ocp.dims.nu = ocp.nlp[0].controls.shape
         self.acados_ocp.solver_options.N_horizon = ocp.nlp[0].ns
+        runtime_parameters = _get_acados_runtime_parameters(ocp.nlp[0])
+        self.acados_ocp.parameter_values = runtime_parameters[:, 0].copy()
 
     def __set_constr_type(self, constr_type: Str = "BGH") -> None:
         """
@@ -897,10 +919,48 @@ class AcadosInterface(SolverInterface):
         else:
             raise RuntimeError("Available acados cost type: 'LINEAR_LS', 'NONLINEAR_LS' and 'EXTERNAL'.")
 
+    def __update_runtime_parameters(self) -> None:
+        """Update node-wise numerical data without regenerating the Acados solver."""
+
+        runtime_parameters = _get_acados_runtime_parameters(self.ocp.nlp[0])
+        expected_size = int(self.acados_model.p.shape[0])
+        if runtime_parameters.shape[0] != expected_size:
+            raise RuntimeError(
+                "The numerical time-series structure changed after the Acados model was generated. "
+                f"Expected {expected_size} runtime parameters per node, got {runtime_parameters.shape[0]}. "
+                "Create a new OptimalControlProgram to change their number."
+            )
+
+        if expected_size == 0:
+            self._runtime_parameter_values = runtime_parameters
+            return
+
+        for stage in range(self.acados_ocp.solver_options.N_horizon + 1):
+            stage_values = np.ascontiguousarray(runtime_parameters[:, stage], dtype=np.float64)
+            if self._runtime_parameter_values is None:
+                self.ocp_solver.set(stage, "p", stage_values)
+                continue
+
+            changed_indices = np.flatnonzero(stage_values != self._runtime_parameter_values[:, stage])
+            if changed_indices.size == 0:
+                continue
+            if changed_indices.size == expected_size:
+                self.ocp_solver.set(stage, "p", stage_values)
+            else:
+                self.ocp_solver.set_params_sparse(
+                    stage,
+                    changed_indices,
+                    np.ascontiguousarray(stage_values[changed_indices], dtype=np.float64),
+                )
+
+        self._runtime_parameter_values = runtime_parameters.copy()
+
     def __update_solver(self):
         """
         Update the ACADOS solver to new values
         """
+
+        self.__update_runtime_parameters()
 
         param_init = []
         for key in self.ocp.nlp[0].parameters.keys():
