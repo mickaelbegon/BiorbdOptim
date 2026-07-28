@@ -131,6 +131,57 @@ def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
     assert acados_ocp.code_gen_options.json_file == "acados_ocp.json"
 
 
+def test_acados_v055_runtime_parameter_updates(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim import OptimalControlProgram
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    model = TorqueBiorbdModel(bioptim_folder + "/examples/models/cube_acados.bioMod")
+    n_shooting = 5
+    runtime_data = np.arange(4 * (n_shooting + 1), dtype=float).reshape((2, 2, n_shooting + 1))
+    dynamics = DynamicsOptions(
+        ode_solver=OdeSolver.RK4(),
+        expand_dynamics=True,
+        numerical_data_timeseries={"runtime_data": runtime_data},
+    )
+
+    x_bounds = BoundsList()
+    x_bounds["q"] = model.bounds_from_ranges("q")
+    x_bounds["qdot"] = model.bounds_from_ranges("qdot")
+    u_bounds = BoundsList()
+    u_bounds["tau"] = [-100] * model.nb_tau, [100] * model.nb_tau
+    ocp = OptimalControlProgram(
+        model,
+        n_shooting,
+        1,
+        dynamics=dynamics,
+        x_bounds=x_bounds,
+        u_bounds=u_bounds,
+        use_sx=True,
+    )
+
+    solver = Solver.ACADOS()
+    first_solution = ocp.solve(solver)
+    assert first_solution.status == 0
+    acados_solver = ocp.ocp_solver.ocp_solver
+    expected_runtime_data = np.vstack((runtime_data[:, 0, :], runtime_data[:, 1, :]))
+    for stage in range(n_shooting + 1):
+        npt.assert_equal(acados_solver.get(stage, "p"), expected_runtime_data[:, stage])
+
+    ocp.nlp[0].numerical_data_timeseries["runtime_data"][1, 0, 2] = 42.0
+    ocp.nlp[0].numerical_data_timeseries["runtime_data"][0, 1, 4] = -3.0
+    with patch.object(acados_solver, "set_params_sparse", wraps=acados_solver.set_params_sparse) as sparse_update:
+        second_solution = ocp.solve(solver)
+
+    assert second_solution.status == 0
+    assert sparse_update.call_count == 2
+    npt.assert_equal(acados_solver.get(2, "p"), [2.0, 42.0, 8.0, 20.0])
+    npt.assert_equal(acados_solver.get(4, "p"), [4.0, 16.0, -3.0, 22.0])
+
+
 def test_acados_v055_code_reuse_and_reset(tmp_path, monkeypatch):
     if platform == "win32":
         return
