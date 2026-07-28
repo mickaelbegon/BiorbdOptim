@@ -19,13 +19,25 @@ fi
 casadi_package_dir="$(
   python -c 'import casadi, pathlib; print(pathlib.Path(casadi.__file__).resolve().parent)'
 )"
+if [[ -f "$casadi_package_dir/libcasadi.so" ]]; then
+  casadi_library="$casadi_package_dir/libcasadi.so"
+  casadi_include_dir="$casadi_package_dir/include/casadi"
+  casadi_cmake_dir="$casadi_package_dir/cmake"
+elif [[ -f "$CONDA_PREFIX/lib/libcasadi.so" ]]; then
+  casadi_library="$CONDA_PREFIX/lib/libcasadi.so"
+  casadi_include_dir="$CONDA_PREFIX/include/casadi"
+  casadi_cmake_dir="$CONDA_PREFIX/lib/cmake/casadi"
+else
+  echo "Could not locate libcasadi.so for the imported CasADi package at $casadi_package_dir" >&2
+  exit 1
+fi
 python_site_packages="$(
   python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])'
 )"
 build_root="$(mktemp -d)"
 trap 'rm -rf "$build_root"' EXIT
 
-echo "Building RBDL-CasADi ${RBDL_COMMIT} against ${casadi_package_dir}"
+echo "Building RBDL-CasADi ${RBDL_COMMIT} against ${casadi_library}"
 git clone --quiet "$RBDL_REPOSITORY" "$build_root/rbdl"
 git -C "$build_root/rbdl" checkout --quiet "$RBDL_COMMIT"
 cmake \
@@ -36,9 +48,9 @@ cmake \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
   -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -I$CONDA_PREFIX/include/eigen3" \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-  -DCasadi_DIR="$casadi_package_dir" \
-  -DCasadi_INCLUDE_DIR="$casadi_package_dir/include/casadi" \
-  -DCasadi_LIBRARY="$casadi_package_dir/libcasadi.so" \
+  -DCasadi_DIR="$casadi_cmake_dir" \
+  -DCasadi_INCLUDE_DIR="$casadi_include_dir" \
+  -DCasadi_LIBRARY="$casadi_library" \
   -DRBDL_BUILD_CASADI=ON \
   -DRBDL_BUILD_EXECUTABLES=OFF \
   -DRBDL_BUILD_TESTS=OFF
@@ -61,7 +73,7 @@ cmake \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
   -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0 -I$CONDA_PREFIX/include/eigen3" \
-  -DCasadi_DIR="$casadi_package_dir/cmake" \
+  -DCasadi_DIR="$casadi_cmake_dir" \
   -DINSTALL_DEPENDENCIES_PREFIX="$CONDA_PREFIX" \
   -DMATH_LIBRARY_BACKEND=Casadi \
   -DMODULE_KALMAN=OFF \
