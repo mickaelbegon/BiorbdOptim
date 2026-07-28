@@ -452,9 +452,14 @@ def generic_get_all_penalties(
                     bound_tp.concatenate(penalty.bounds)
 
             # We can call penalty.weighted_function[0] since multi-thread declares all the node at [0]
-            out[0] = vertcat(
-                out[0], sum2(reshape(penalty.weighted_function[0](t0, phases_dt, x, u, p, a, d, weight, target), -1, 1))
+            penalty_value = sum2(
+                reshape(
+                    penalty.weighted_function[0](t0, phases_dt, x, u, p, a, d, weight, target),
+                    -1,
+                    1,
+                )
             )
+            out[0] = vertcat(out[0], interface.transform_penalty_value(penalty, nlp, penalty_value))
             if get_bounds:
                 if penalty.bounds is None:
                     raise RuntimeError("Cannot get bounds if penalty.bounds is None")
@@ -468,9 +473,10 @@ def generic_get_all_penalties(
                 t0, x, u, p, a, d, weight, target = _get_weighted_function_inputs(penalty, idx, ocp, nlp, scaled)
 
                 node_idx = penalty.node_idx[idx]
+                penalty_value = sum2(penalty.weighted_function[node_idx](t0, phases_dt, x, u, p, a, d, weight, target))
                 out[node_idx] = vertcat(
                     out[node_idx],
-                    sum2(penalty.weighted_function[node_idx](t0, phases_dt, x, u, p, a, d, weight, target)),
+                    interface.transform_penalty_value(penalty, nlp, penalty_value),
                 )
                 if get_bounds:
                     if penalty.bounds is None:
