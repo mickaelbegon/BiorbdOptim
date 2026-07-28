@@ -114,6 +114,60 @@ compiled against the newer `libmad_*` interface, which is why the workflow
 builds the pinned CasADi 3.8 source instead of using the earlier benchmark
 wheel.
 
+### Linux MUMPS versus PARDISO MKL results
+
+These measurements come from
+[GitHub Actions run 30317721535](https://github.com/mickaelbegon/BiorbdOptim/actions/runs/30317721535)
+on 2026-07-28 (Ubuntu 24.04 x86-64, CasADi 3.8.0, one thread). Each row has one
+cold solve in a fresh Python process and the median of three hot solves after
+that first solve. A hot solve is not an OCP warm start. Both backends use the
+same MadNLP configuration and variable ordering.
+
+| Case | Shooting | Linear solver | Cold solve (s) | Hot solve (s) | Hot solver (s) | Hot iter. | Cost | Max violation | Outcome |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---|
+| Pendulum | 20 | MUMPS | **8.745** | **0.718** | 0.154 | 24 | 68.046875 | 3.37e-13 | success |
+| Pendulum | 20 | PARDISO MKL | 8.770 | 0.719 | **0.151** | 24 | 68.046875 | 2.75e-13 | success |
+| Pendulum | 500 | MUMPS | 64.129 | 55.436 | 39.902 | 247 | 35.664490 | 1.85e-09 | success |
+| Pendulum | 500 | PARDISO MKL | **53.594** | **43.106** | **27.491** | **173** | 35.664490 | 1.28e-10 | success |
+| Cube | 10 | MUMPS | 7.930 | 0.031 | 0.0027 | 11 | 1117.997245 | 8.88e-15 | success |
+| Cube | 10 | PARDISO MKL | **7.924** | **0.031** | **0.0017** | 11 | 1117.997245 | 6.29e-12 | success |
+| Static arm | 10 | MUMPS | **45.463** | 37.734 | 16.390 | 67 | 330.979936 | 2.24e-08 | success |
+| Static arm | 10 | PARDISO MKL | 47.600 | **37.677** | **16.301** | 67 | 330.979936 | 2.24e-08 | success |
+| Free time | 10 | MUMPS | 10.616 | 0.874 | 0.720 | 94 | 1137.695623 | 9.97e-09 | success |
+| Free time | 10 | PARDISO MKL | — | — | — | — | — | — | runtime failure |
+| Multiphase | 10/phase | MUMPS | 8.281 | 0.377 | 0.076 | 10 | 33846.126974 | 4.88e-15 | success |
+| Multiphase | 10/phase | PARDISO MKL | — | — | — | 96 | 47845.924008 | 2.36e-12 | solver failure |
+| Contact inequalities | 10 | MUMPS | **19.146** | **9.319** | **8.660** | **69** | 0.151329 | 2.73e-12 | success |
+| Contact inequalities | 10 | PARDISO MKL | 20.541 | 10.741 | 10.114 | 79 | 0.151329 | 3.51e-14 | success |
+| Holonomic muscle | 5 | MUMPS | **41.582** | 33.660 | 28.536 | 26 | 0.013516 | 7.15e-07 | success |
+| Holonomic muscle | 5 | PARDISO MKL | 41.614 | **32.222** | **27.232** | 26 | 0.013516 | 7.15e-07 | success |
+| Muscle fatigue | 50 | MUMPS | **29.372** | **21.386** | **19.912** | **64** | 17.288824 | 2.77e-08 | success |
+| Muscle fatigue | 50 | PARDISO MKL | 53.371 | 45.356 | 43.897 | 123 | 17.288824 | 2.73e-08 | success |
+
+PARDISO is not a general replacement for MUMPS in this matrix:
+
+- MUMPS succeeds on all nine cases; PARDISO succeeds on seven. PARDISO raises
+  a `MadNLPError` on `free_time` and stops after 96 iterations with large dual
+  infeasibility on `multiphase`.
+- On the seven common successes, PARDISO's summed hot wall time is 7.3% higher
+  and its summed hot solver time is 10.2% higher. Its summed cold time is 7.9%
+  higher. The muscle-fatigue case drives this regression.
+- Without muscle fatigue, PARDISO's summed hot wall and solver times are 9.1%
+  and 13.2% lower, respectively. The clearest win is the 500-interval pendulum:
+  22.2% less hot wall time, 31.1% less hot solver time, and 173 instead of 247
+  iterations.
+- On muscle fatigue, PARDISO takes 45.356 s hot versus 21.386 s for MUMPS and
+  123 versus 64 iterations. A faster factorization cannot compensate for the
+  different numerical trajectory in this Hessian-heavy problem.
+
+The successful solutions have matching costs at the displayed precision and
+acceptable constraint violations. MUMPS therefore remains the robust default.
+PARDISO MKL is a useful opt-in candidate for large sparse KKT systems, but it
+should be selected only after checking convergence and solution equivalence on
+the target formulation. These timings are from one runner series; the three hot
+repetitions reduce startup noise but do not characterize machine-to-machine
+variance.
+
 IPOPT supports two distinct PARDISO interfaces. A build linked against Intel
 oneMKL accepts `pardisomkl`:
 
