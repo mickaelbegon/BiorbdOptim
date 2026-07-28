@@ -6,6 +6,7 @@ import numpy as np
 from scipy import linalg
 from casadi import SX, vertcat, Function
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from acados_template.utils import status_to_str
 
 from .solver_interface import SolverInterface
 from ..interfaces import Solver
@@ -20,6 +21,124 @@ from ..misc.parameters_types import (
     Bool,
     AnyListorDict,
 )
+
+
+_ACADOS_TIMING_FIELDS = (
+    "time_tot",
+    "time_lin",
+    "time_sim",
+    "time_sim_ad",
+    "time_sim_la",
+    "time_qp",
+    "time_qp_solver_call",
+    "time_qp_xcond",
+    "time_glob",
+    "time_qpscaling",
+    "time_reg",
+    "time_preparation",
+    "time_feedback",
+)
+
+
+def _safe_acados_stat(acados_solver: AcadosOcpSolver, field: Str, errors: dict) -> int | float | np.ndarray | None:
+    """Read a diagnostic value without masking an otherwise usable solve."""
+
+    try:
+        value = acados_solver.get_stats(field)
+    except Exception as exc:  # Diagnostics must remain available after partial solver failures.
+        errors[field] = f"{type(exc).__name__}: {exc}"
+        return None
+
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _statistics_solver_details(statistics: np.ndarray | None, nlp_solver_type: Str) -> dict:
+    """Extract solver-independent QP histories from Acados' solver-specific table."""
+
+    details = {
+        "qp_status": None,
+        "qp_iterations": None,
+        "qp_iterations_per_solve": None,
+        "step_sizes": None,
+    }
+    if statistics is None or statistics.ndim != 2 or statistics.size == 0:
+        return details
+
+    if nlp_solver_type == "SQP" and statistics.shape[0] >= 8:
+        details["qp_status"] = statistics[5, :].copy()
+        details["qp_iterations"] = statistics[6, :].copy()
+        details["step_sizes"] = statistics[7, :].copy()
+    elif nlp_solver_type == "SQP_RTI" and statistics.shape[0] >= 3:
+        details["qp_status"] = statistics[1, :].copy()
+        details["qp_iterations"] = statistics[2, :].copy()
+    elif nlp_solver_type == "DDP" and statistics.shape[0] >= 8:
+        details["qp_status"] = statistics[5, :].copy()
+        details["qp_iterations"] = statistics[6, :].copy()
+        details["step_sizes"] = statistics[7, :].copy()
+    elif nlp_solver_type == "SQP_WITH_FEASIBLE_QP" and statistics.shape[0] >= 14:
+        details["qp_status"] = statistics[[5, 7, 9], :].T.copy()
+        details["qp_iterations_per_solve"] = statistics[[6, 8, 10], :].T.copy()
+        details["qp_iterations"] = np.sum(details["qp_iterations_per_solve"], axis=1)
+        details["step_sizes"] = statistics[11, :].copy()
+
+    return details
+
+
+def _collect_acados_diagnostics(
+    acados_solver: AcadosOcpSolver,
+    status: int | None,
+    nlp_solver_type: Str,
+    qp_solver: Str,
+) -> dict:
+    """Create an immutable snapshot of the public diagnostics exposed by Acados v0.5.5."""
+
+    errors = {}
+    raw_statistics = _safe_acados_stat(acados_solver, "statistics", errors)
+    raw_statistics = np.asarray(raw_statistics, dtype=float) if raw_statistics is not None else None
+    solver_details = _statistics_solver_details(raw_statistics, nlp_solver_type)
+
+    try:
+        residual_values = np.asarray(acados_solver.get_residuals(recompute=False), dtype=float).reshape(-1).copy()
+    except Exception as exc:  # Diagnostics must remain available after partial solver failures.
+        errors["residuals"] = f"{type(exc).__name__}: {exc}"
+        residual_values = np.array([], dtype=float)
+
+    residuals = None
+    if residual_values.size >= 4:
+        residuals = dict(
+            zip(
+                ("stationarity", "dynamics", "inequality", "complementarity"),
+                (float(value) for value in residual_values[:4]),
+            )
+        )
+
+    timings = {
+        field: value
+        for field in _ACADOS_TIMING_FIELDS
+        if (value := _safe_acados_stat(acados_solver, field, errors)) is not None
+    }
+    status_value = -1 if status is None else int(status)
+    diagnostics = {
+        "status": status,
+        "status_label": status_to_str(status_value),
+        "successful": status == 0,
+        "nlp_solver_type": nlp_solver_type,
+        "qp_solver": qp_solver,
+        "residuals": residuals,
+        "nlp_iterations": _safe_acados_stat(acados_solver, "nlp_iter", errors),
+        "sqp_iterations": _safe_acados_stat(acados_solver, "sqp_iter", errors),
+        "qp_scaling_status": _safe_acados_stat(acados_solver, "qpscaling_status", errors),
+        "timings": timings,
+        "raw_statistics": raw_statistics,
+        **solver_details,
+    }
+    if errors:
+        diagnostics["unavailable_statistics"] = errors
+    return diagnostics
 
 
 def _configure_acados_codegen(acados_ocp: AcadosOcp, solver_options: Solver.ACADOS) -> None:
@@ -105,6 +224,8 @@ class AcadosInterface(SolverInterface):
         Update the ACADOS solver to new values
     get_optimized_value(self) -> list[dict] | dict
         Get the previously optimized solution
+    get_diagnostics(self) -> dict
+        Get a snapshot of the diagnostics from the previous solver call
     solve(self) -> "AcadosInterface"
         Solve the prepared ocp
     """
@@ -892,6 +1013,7 @@ class AcadosInterface(SolverInterface):
         acados_x = acados_x[n_params:, :]
         acados_u = np.array([self.ocp_solver.get(i, "u") for i in range(ns)]).T
 
+        diagnostics = self.get_diagnostics()
         out = {
             "x": [],
             "u": acados_u,
@@ -900,6 +1022,7 @@ class AcadosInterface(SolverInterface):
             "iter": self.ocp_solver.get_stats("sqp_iter"),
             "status": self.status,
             "solver": SolverType.ACADOS,
+            "solver_diagnostics": diagnostics,
         }
 
         out["x"] = vertcat(out["x"], acados_x.reshape(-1, 1, order="F"))
@@ -917,6 +1040,40 @@ class AcadosInterface(SolverInterface):
             out.append(self.out[key])
 
         return out[0] if len(out) == 1 else out
+
+    def get_diagnostics(self) -> dict:
+        """
+        Get a snapshot of the public diagnostics from the previous Acados solve.
+
+        The returned values are detached from the mutable Acados capsule, so they
+        remain valid when the same solver is reused for a subsequent solve.
+        """
+
+        if self.ocp_solver is None:
+            return {
+                "status": self.status,
+                "status_label": status_to_str(-1),
+                "successful": False,
+                "nlp_solver_type": self.opts.nlp_solver_type,
+                "qp_solver": self.opts.qp_solver,
+                "residuals": None,
+                "nlp_iterations": None,
+                "sqp_iterations": None,
+                "qp_scaling_status": None,
+                "timings": {},
+                "raw_statistics": None,
+                "qp_status": None,
+                "qp_iterations": None,
+                "qp_iterations_per_solve": None,
+                "step_sizes": None,
+            }
+
+        return _collect_acados_diagnostics(
+            self.ocp_solver,
+            status=self.status,
+            nlp_solver_type=self.acados_ocp.solver_options.nlp_solver_type,
+            qp_solver=self.acados_ocp.solver_options.qp_solver,
+        )
 
     def solve(self, expand_during_shake_tree: Bool = False) -> AnyListorDict:
         """
