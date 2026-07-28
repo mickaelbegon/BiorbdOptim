@@ -76,7 +76,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/casadi-libmad-pardiso-runtime.tar.gz
-          key: casadi-${{ env.CASADI_COMMIT }}-libmad-${{ env.LIBMAD_COMMIT }}-ubuntu-24.04-v1
+          key: casadi-${{ env.CASADI_COMMIT }}-libmad-${{ env.LIBMAD_COMMIT }}-abi0-ubuntu-24.04-v1
 
       - name: Install Julia 1.12
         if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
@@ -111,6 +111,7 @@ jobs:
             -B .cache/casadi-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
             -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
             -DWITH_PYTHON=ON \
             -DWITH_MADNLP=ON \
