@@ -33,7 +33,17 @@ MADNLP_LINEAR_SOLVERS = {
     "pardiso_mkl": "PardisoMKLSolver",
     "pardisomkl": "PardisoMKLSolver",
     "pardisomklsolver": "PardisoMKLSolver",
+    "robust_pardiso_mkl": "RobustPardisoMKLSolver",
+    "pardiso_mkl_robust": "RobustPardisoMKLSolver",
+    "robustpardisomklsolver": "RobustPardisoMKLSolver",
 }
+
+MADNLP_PARDISO_PROFILES = ("baseline", "robust", "robust_inertia_free")
+MADNLP_PARDISO_PROFILE_OPTIONS = (
+    "inertia_correction_method",
+    "default_primal_regularization",
+    "default_dual_regularization",
+)
 
 
 def has_madnlp() -> bool:
@@ -67,6 +77,7 @@ class MADNLP(GenericSolver):
     _max_iter: Int = 1000
     _print_level: Int = 3
     _linear_solver: Str = "MumpsSolver"
+    _pardiso_profile: Str | None = None
     _c_compile: Bool = False
     _madnlp_options: dict[str, Any] = field(default_factory=dict)
 
@@ -89,6 +100,10 @@ class MADNLP(GenericSolver):
     @property
     def linear_solver(self) -> Str:
         return self._linear_solver
+
+    @property
+    def pardiso_profile(self) -> Str | None:
+        return self._pardiso_profile
 
     @property
     def c_compile(self) -> Bool:
@@ -125,11 +140,40 @@ class MADNLP(GenericSolver):
         """
         if not isinstance(value, str):
             raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL")
+        if self._pardiso_profile is not None:
+            for option in MADNLP_PARDISO_PROFILE_OPTIONS:
+                self._madnlp_options.pop(option, None)
         key = value.replace("-", "_").replace(" ", "_").lower()
         try:
             self._linear_solver = MADNLP_LINEAR_SOLVERS[key]
         except KeyError as error:
             raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL") from error
+        self._pardiso_profile = {
+            "PardisoMKLSolver": "baseline",
+            "RobustPardisoMKLSolver": "robust",
+        }.get(self._linear_solver)
+
+    def set_pardiso_profile(self, value: Str) -> None:
+        """Configure one of the reproducible PARDISO robustness profiles."""
+        if not isinstance(value, str):
+            raise ValueError("MadNLP PARDISO profile must be baseline, robust, or robust_inertia_free")
+        profile = value.replace("-", "_").replace(" ", "_").lower()
+        if profile not in MADNLP_PARDISO_PROFILES:
+            raise ValueError("MadNLP PARDISO profile must be baseline, robust, or robust_inertia_free")
+
+        for option in MADNLP_PARDISO_PROFILE_OPTIONS:
+            self._madnlp_options.pop(option, None)
+
+        self.set_linear_solver("pardiso_mkl" if profile == "baseline" else "robust_pardiso_mkl")
+        if profile == "robust_inertia_free":
+            self._madnlp_options.update(
+                {
+                    "inertia_correction_method": "InertiaFree",
+                    "default_primal_regularization": 1e-8,
+                    "default_dual_regularization": 1e-8,
+                }
+            )
+        self._pardiso_profile = profile
 
     def set_warm_start_options(self, val: Float = 1e-10) -> None:
         """Enable use of multipliers supplied through CasADi's standard nlpsol inputs."""

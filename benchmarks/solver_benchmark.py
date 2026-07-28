@@ -62,6 +62,7 @@ class RunResult:
     repetition: int
     temperature: str
     outcome: str
+    solver_profile: str | None = None
     build_s: float | None = None
     solve_wall_s: float | None = None
     solver_s: float | None = None
@@ -102,6 +103,7 @@ def make_solver(
     max_iterations: int,
     acados_dir: str | None,
     madnlp_linear_solver: str | None = None,
+    madnlp_pardiso_profile: str | None = None,
     ipopt_linear_solver: str | None = None,
     ipopt_hsl_library: str | None = None,
     ipopt_pardiso_library: str | None = None,
@@ -117,8 +119,11 @@ def make_solver(
     solver.set_constraint_tolerance(tolerance)
     solver.set_maximum_iterations(max_iterations)
     solver.set_print_level("ERROR" if name == "madnlp" else 0)
-    if name == "madnlp" and madnlp_linear_solver is not None:
-        solver.set_linear_solver(madnlp_linear_solver)
+    if name == "madnlp":
+        if madnlp_pardiso_profile is not None:
+            solver.set_pardiso_profile(madnlp_pardiso_profile)
+        elif madnlp_linear_solver is not None:
+            solver.set_linear_solver(madnlp_linear_solver)
     if name == "ipopt":
         if ipopt_linear_solver is not None:
             solver.set_linear_solver(ipopt_linear_solver)
@@ -242,12 +247,17 @@ def run_once(
     max_iterations: int,
     acados_dir: str | None,
     madnlp_linear_solver: str | None = None,
+    madnlp_pardiso_profile: str | None = None,
     ipopt_linear_solver: str | None = None,
     ipopt_hsl_library: str | None = None,
     ipopt_pardiso_library: str | None = None,
 ) -> RunResult:
     selected_linear_solver = (
-        madnlp_linear_solver
+        {
+            "baseline": "PardisoMKLSolver",
+            "robust": "RobustPardisoMKLSolver",
+            "robust_inertia_free": "RobustPardisoMKLSolver",
+        }.get(madnlp_pardiso_profile, madnlp_linear_solver)
         if solver_name == "madnlp"
         else ipopt_linear_solver if solver_name == "ipopt" else None
     )
@@ -261,6 +271,7 @@ def run_once(
             max_iterations,
             acados_dir,
             madnlp_linear_solver,
+            madnlp_pardiso_profile,
             ipopt_linear_solver,
             ipopt_hsl_library,
             ipopt_pardiso_library,
@@ -299,6 +310,7 @@ def run_once(
             repetition=repetition,
             temperature=temperature,
             outcome=outcome,
+            solver_profile=madnlp_pardiso_profile if solver_name == "madnlp" else None,
             build_s=build_s,
             solve_wall_s=solve_wall_s,
             solver_s=optional_float(solution.solver_time_to_optimize),
@@ -323,6 +335,7 @@ def run_once(
             repetition=repetition,
             temperature=temperature,
             outcome="exception",
+            solver_profile=madnlp_pardiso_profile if solver_name == "madnlp" else None,
             error=f"{type(error).__name__}: {error}",
         )
 
@@ -342,12 +355,12 @@ def median_ratio_or_none(rows: list[RunResult], numerator: str, denominator: str
 
 
 def summarize(rows: list[RunResult]) -> list[dict]:
-    groups: dict[tuple[str, str, str | None, int], list[RunResult]] = {}
+    groups: dict[tuple[str, str, str | None, str | None, int], list[RunResult]] = {}
     for row in rows:
-        groups.setdefault((row.case, row.solver, row.linear_solver, row.n_shooting), []).append(row)
+        groups.setdefault((row.case, row.solver, row.linear_solver, row.solver_profile, row.n_shooting), []).append(row)
 
     summary = []
-    for (case, solver, linear_solver, n_shooting), group in sorted(
+    for (case, solver, linear_solver, solver_profile, n_shooting), group in sorted(
         groups.items(), key=lambda item: tuple("" if value is None else value for value in item[0])
     ):
         successful = [row for row in group if row.outcome == "success"]
@@ -358,6 +371,7 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                 "case": case,
                 "solver": solver,
                 "linear_solver": linear_solver,
+                "solver_profile": solver_profile,
                 "n_shooting": n_shooting,
                 "successful_runs": len(successful),
                 "total_runs": len(group),
@@ -416,9 +430,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
         "--madnlp-linear-solver",
-        choices=("mumps", "umfpack", "pardiso_mkl"),
+        choices=("mumps", "umfpack", "pardiso_mkl", "robust_pardiso_mkl"),
         default="mumps",
         help="MadNLP linear solver. Run each backend in a fresh process for comparable cold timings.",
+    )
+    parser.add_argument(
+        "--madnlp-pardiso-profile",
+        choices=("baseline", "robust", "robust_inertia_free"),
+        help="Reproducible PARDISO profile; overrides --madnlp-linear-solver for MadNLP.",
     )
     parser.add_argument(
         "--ipopt-linear-solver",
@@ -456,6 +475,7 @@ def main(argv: list[str] | None = None) -> int:
         "tolerance": args.tolerance,
         "max_iterations": args.max_iterations,
         "madnlp_linear_solver": args.madnlp_linear_solver,
+        "madnlp_pardiso_profile": args.madnlp_pardiso_profile,
         "ipopt_linear_solver": args.ipopt_linear_solver,
         "ipopt_hsl_library": args.ipopt_hsl_library,
         "ipopt_pardiso_library": args.ipopt_pardiso_library,
@@ -479,6 +499,7 @@ def main(argv: list[str] | None = None) -> int:
                             repetition=0,
                             temperature="n/a",
                             outcome="unavailable",
+                            solver_profile=args.madnlp_pardiso_profile if solver_name == "madnlp" else None,
                             error=reason,
                         )
                     )
@@ -495,6 +516,7 @@ def main(argv: list[str] | None = None) -> int:
                             args.max_iterations,
                             args.acados_dir,
                             args.madnlp_linear_solver,
+                            args.madnlp_pardiso_profile,
                             args.ipopt_linear_solver,
                             args.ipopt_hsl_library,
                             args.ipopt_pardiso_library,
@@ -514,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
                                 args.max_iterations,
                                 args.acados_dir,
                                 args.madnlp_linear_solver,
+                                args.madnlp_pardiso_profile,
                                 args.ipopt_linear_solver,
                                 args.ipopt_hsl_library,
                                 args.ipopt_pardiso_library,
@@ -532,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
                             args.max_iterations,
                             args.acados_dir,
                             args.madnlp_linear_solver,
+                            args.madnlp_pardiso_profile,
                             args.ipopt_linear_solver,
                             args.ipopt_hsl_library,
                             args.ipopt_pardiso_library,

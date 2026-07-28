@@ -60,6 +60,9 @@ def test_madnlp_solver_options(monkeypatch):
         ("pardiso_mkl", "PardisoMKLSolver"),
         ("pardisomkl", "PardisoMKLSolver"),
         ("PardisoMKLSolver", "PardisoMKLSolver"),
+        ("robust_pardiso_mkl", "RobustPardisoMKLSolver"),
+        ("pardiso_mkl_robust", "RobustPardisoMKLSolver"),
+        ("RobustPardisoMKLSolver", "RobustPardisoMKLSolver"),
     ),
 )
 def test_madnlp_linear_solver_aliases(monkeypatch, value, expected):
@@ -74,6 +77,56 @@ def test_madnlp_rejects_unknown_linear_solver(monkeypatch):
     solver = Solver.MADNLP()
     with pytest.raises(ValueError, match="MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL"):
         solver.set_linear_solver("ma57")
+
+
+@pytest.mark.parametrize(
+    ("profile", "linear_solver", "extra_options"),
+    (
+        ("baseline", "PardisoMKLSolver", {}),
+        ("robust", "RobustPardisoMKLSolver", {}),
+        (
+            "robust-inertia-free",
+            "RobustPardisoMKLSolver",
+            {
+                "inertia_correction_method": "InertiaFree",
+                "default_primal_regularization": 1e-8,
+                "default_dual_regularization": 1e-8,
+            },
+        ),
+    ),
+)
+def test_madnlp_pardiso_profiles(monkeypatch, profile, linear_solver, extra_options):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    solver.set_pardiso_profile(profile)
+
+    assert solver.linear_solver == linear_solver
+    assert solver.pardiso_profile == profile.replace("-", "_")
+    options = solver.as_dict(FakeSolver({}))["madnlp"]
+    assert {key: options[key] for key in extra_options} == extra_options
+
+
+def test_madnlp_rejects_unknown_pardiso_profile(monkeypatch):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    with pytest.raises(ValueError, match="baseline, robust, or robust_inertia_free"):
+        solver.set_pardiso_profile("fast-but-fragile")
+
+
+def test_madnlp_switching_pardiso_profile_removes_owned_options(monkeypatch):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    solver = Solver.MADNLP()
+    solver.set_pardiso_profile("robust_inertia_free")
+    solver.set_pardiso_profile("baseline")
+
+    options = solver.as_dict(FakeSolver({}))["madnlp"]
+    assert solver.pardiso_profile == "baseline"
+    profile_options = (
+        "inertia_correction_method",
+        "default_primal_regularization",
+        "default_dual_regularization",
+    )
+    assert not any(key in options for key in profile_options)
 
 
 def test_madnlp_unavailable(monkeypatch):

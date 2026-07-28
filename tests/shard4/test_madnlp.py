@@ -81,7 +81,7 @@ def test_madnlp_linear_solver_backends():
     reason="requires an x86-64 libMad runtime compiled with MadNLPPardiso",
 )
 def test_madnlp_pardiso_mkl_backend():
-    """Verify that requesting PARDISO MKL does not silently retain MUMPS."""
+    """Verify that all PARDISO profiles select the intended libMad backend."""
     script = textwrap.dedent(
         """
         import casadi as cas
@@ -89,18 +89,19 @@ def test_madnlp_pardiso_mkl_backend():
 
         x = cas.MX.sym("x", 2)
         nlp = {"x": x, "f": (x[0] - 1) ** 2 + (x[1] - 2) ** 2, "g": x[0] + x[1]}
-        options = Solver.MADNLP()
-        options.set_print_level("INFO")
-        options.set_linear_solver("pardiso_mkl")
-        solver = cas.nlpsol(
-            "madnlp_pardiso_mkl",
-            "madnlp",
-            nlp,
-            options.as_dict(type("I", (), {"options_common": {}})()),
-        )
-        result = solver(x0=[0, 0], lbg=3, ubg=3)
-        assert solver.stats()["success"]
-        assert abs(float(result["f"])) <= 1e-10
+        for index, profile in enumerate(("baseline", "robust", "robust_inertia_free")):
+            options = Solver.MADNLP()
+            options.set_print_level("INFO")
+            options.set_pardiso_profile(profile)
+            solver = cas.nlpsol(
+                f"madnlp_pardiso_mkl_{index}",
+                "madnlp",
+                nlp,
+                options.as_dict(type("I", (), {"options_common": {}})()),
+            )
+            result = solver(x0=[0, 0], lbg=3, ubg=3)
+            assert solver.stats()["success"]
+            assert abs(float(result["f"])) <= 1e-10
         """
     )
     process = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
@@ -108,6 +109,7 @@ def test_madnlp_pardiso_mkl_backend():
 
     assert process.returncode == 0, output
     assert "running with pardiso-mkl" in output.lower()
+    assert "running with pardiso-mkl-robust" in output.lower()
     assert "unknown type" not in output.lower()
     assert "running with MUMPS" not in output
 

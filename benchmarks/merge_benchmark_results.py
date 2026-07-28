@@ -54,6 +54,7 @@ def load_results(input_directory: Path) -> tuple[list[dict], list[dict], list[di
             CASE_ORDER.get(row["case"], len(CASE_ORDER)),
             row["n_shooting"],
             SOLVER_ORDER.get(row["solver"], len(SOLVER_ORDER)),
+            row.get("solver_profile") or "",
             row.get("linear_solver") or "",
         )
     )
@@ -92,7 +93,9 @@ def write_markdown(path: Path, summaries: list[dict], metadata: list[dict]) -> N
                     row["case"],
                     str(row["n_shooting"]),
                     (
-                        f'{row["solver"]} ({row["linear_solver"]})'
+                        f'{row["solver"]} ({row["solver_profile"]})'
+                        if row.get("solver_profile")
+                        else f'{row["solver"]} ({row["linear_solver"]})'
                         if row.get("linear_solver")
                         else row["solver"]
                     ),

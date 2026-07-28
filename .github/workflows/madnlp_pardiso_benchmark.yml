@@ -18,16 +18,18 @@ on:
       - ".github/madnlp-linux-environment.yml"
       - ".github/scripts/install_biorbd_casadi_linux.sh"
       - ".github/workflows/madnlp_pardiso_benchmark.yml"
-      - "benchmarks/**"
+      - "benchmarks/solver_benchmark.py"
+      - "benchmarks/merge_benchmark_results.py"
       - "bioptim/interfaces/madnlp_options.py"
       - "tests/shard4/test_madnlp.py"
+      - "tests/shard5/test_solver_options.py"
 
 permissions:
   contents: read
 
 env:
   CASADI_COMMIT: 4a565076185d9240687e10e2a8208bed639c226f
-  LIBMAD_COMMIT: 5529f23a6bff33c566ad954da38d352f1f172356
+  LIBMAD_COMMIT: 218a70f956b69759cf46c4e1ba671e5aa7c6b6cf
   JULIA_CPU_TARGET: "generic"
   JULIA_CUDA_USE_COMPAT: "false"
   MKL_NUM_THREADS: "1"
@@ -36,9 +38,9 @@ env:
 
 jobs:
   benchmark:
-    name: MUMPS versus PARDISO MKL
+    name: MUMPS and three PARDISO MKL profiles
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     defaults:
       run:
         shell: bash -l {0}
@@ -76,7 +78,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .cache/casadi-libmad-pardiso-runtime.tar.gz
-          key: casadi-${{ env.CASADI_COMMIT }}-libmad-${{ env.LIBMAD_COMMIT }}-abi0-ubuntu-24.04-v1
+          key: casadi-${{ env.CASADI_COMMIT }}-libmad-${{ env.LIBMAD_COMMIT }}-abi0-ubuntu-24.04-v2
 
       - name: Install Julia 1.12
         if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
@@ -146,7 +148,7 @@ jobs:
       - name: Configure libMad runtime
         run: |
           echo "LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$CONDA_PREFIX/share/julia/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
-          libssl="$(find "$CONDA_PREFIX/share/julia" -name 'libssl.so*' -type f -print -quit 2>/dev/null || true)"
+          libssl="$(find "$CONDA_PREFIX/share/julia" -name 'libssl.so*' -print -quit 2>/dev/null || true)"
           if [[ -n "$libssl" ]]; then
             echo "LD_PRELOAD=$libssl" >> "$GITHUB_ENV"
           fi
@@ -181,25 +183,30 @@ jobs:
           cases=(pendulum pendulum cube static_arm free_time multiphase contact_inequality holonomic_muscle muscle_fatigue)
           sizes=(20 500 10 10 10 10 10 5 50)
           labels=(pendulum-20 pendulum-500 cube-10 static-arm-10 free-time-10 multiphase-10 contact-10 holonomic-muscle-5 muscle-fatigue-50)
-          linear_solvers=(mumps pardiso_mkl)
+          profiles=(mumps baseline robust robust_inertia_free)
 
           for index in "${!cases[@]}"; do
-            for linear_solver in "${linear_solvers[@]}"; do
-              output="$result_root/${labels[$index]}-madnlp-$linear_solver"
+            for profile in "${profiles[@]}"; do
+              output="$result_root/${labels[$index]}-madnlp-$profile"
               run_directory="$(mktemp -d)"
+              if [[ "$profile" == "mumps" ]]; then
+                profile_args=(--madnlp-linear-solver mumps)
+              else
+                profile_args=(--madnlp-pardiso-profile "$profile")
+              fi
               if ! (
                 cd "$run_directory"
                 python -m benchmarks.solver_benchmark \
                   --cases "${cases[$index]}" \
                   --solvers madnlp \
                   --sizes "${sizes[$index]}" \
-                  --madnlp-linear-solver "$linear_solver" \
+                  "${profile_args[@]}" \
                   --warmups "$WARMUPS" \
                   --repetitions "$REPETITIONS" \
                   --max-iterations 500 \
                   --output "$output"
               ); then
-                echo "::warning title=Benchmark combination failed::${labels[$index]} with $linear_solver did not produce a successful solve"
+                echo "::warning title=Benchmark combination failed::${labels[$index]} with $profile did not produce a successful solve"
               fi
             done
           done
