@@ -33,6 +33,81 @@ from bioptim import (
 from tests.utils import TestUtils
 
 
+def test_acados_v055_diagnostics_snapshot():
+    from bioptim.interfaces.acados_interface import _collect_acados_diagnostics
+
+    statistics = np.array(
+        [
+            [0.0, 1.0],
+            [1e-1, 1e-6],
+            [2e-1, 2e-6],
+            [3e-1, 3e-6],
+            [4e-1, 4e-6],
+            [0.0, 0.0],
+            [2.0, 1.0],
+            [0.0, 0.75],
+        ]
+    )
+
+    class FakeAcadosSolver:
+        def __init__(self, statistics_table=statistics):
+            self.statistics_table = statistics_table
+
+        def get_stats(self, field):
+            values = {
+                "statistics": self.statistics_table,
+                "nlp_iter": 1,
+                "sqp_iter": 1,
+                "qpscaling_status": 0,
+                "time_tot": 0.12,
+                "time_qp": 0.03,
+            }
+            if field not in values:
+                raise ValueError(f"{field} unavailable")
+            return values[field]
+
+        def get_residuals(self, recompute=False):
+            assert recompute is False
+            return np.array([1e-6, 2e-6, 3e-6, 4e-6])
+
+    diagnostics = _collect_acados_diagnostics(
+        FakeAcadosSolver(),
+        status=4,
+        nlp_solver_type="SQP",
+        qp_solver="PARTIAL_CONDENSING_HPIPM",
+    )
+
+    assert diagnostics["status_label"] == "ACADOS_QP_FAILURE"
+    assert diagnostics["successful"] is False
+    assert diagnostics["residuals"] == {
+        "stationarity": 1e-6,
+        "dynamics": 2e-6,
+        "inequality": 3e-6,
+        "complementarity": 4e-6,
+    }
+    npt.assert_equal(diagnostics["qp_status"], [0.0, 0.0])
+    npt.assert_equal(diagnostics["qp_iterations"], [2.0, 1.0])
+    npt.assert_equal(diagnostics["step_sizes"], [0.0, 0.75])
+    assert diagnostics["timings"]["time_tot"] == 0.12
+    assert diagnostics["timings"]["time_qp"] == 0.03
+    assert "time_sim" in diagnostics["unavailable_statistics"]
+
+    feasible_qp_statistics = np.zeros((14, 2))
+    feasible_qp_statistics[[5, 7, 9], :] = [[0, 0], [1, 0], [0, 2]]
+    feasible_qp_statistics[[6, 8, 10], :] = [[2, 3], [4, 5], [6, 7]]
+    feasible_qp_statistics[11, :] = [1.0, 0.5]
+    feasible_qp_diagnostics = _collect_acados_diagnostics(
+        FakeAcadosSolver(feasible_qp_statistics),
+        status=0,
+        nlp_solver_type="SQP_WITH_FEASIBLE_QP",
+        qp_solver="PARTIAL_CONDENSING_HPIPM",
+    )
+    npt.assert_equal(feasible_qp_diagnostics["qp_status"], [[0, 1, 0], [0, 0, 2]])
+    npt.assert_equal(feasible_qp_diagnostics["qp_iterations_per_solve"], [[2, 4, 6], [3, 5, 7]])
+    npt.assert_equal(feasible_qp_diagnostics["qp_iterations"], [12, 15])
+    npt.assert_equal(feasible_qp_diagnostics["step_sizes"], [1.0, 0.5])
+
+
 def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
     pytest.importorskip("acados_template")
     from acados_template import AcadosOcp
@@ -138,6 +213,34 @@ def test_acados_v055_solver_modes(solver_mode):
 
     sol = ocp.solve(solver=solver)
     assert sol.status == 0
+    diagnostics = sol.solver_diagnostics
+    assert diagnostics["status"] == 0
+    assert diagnostics["status_label"] == "ACADOS_SUCCESS"
+    assert diagnostics["successful"] is True
+    assert diagnostics["nlp_solver_type"] == (
+        "SQP_WITH_FEASIBLE_QP" if solver_mode == "SQP_WITH_FEASIBLE_QP" else "SQP"
+    )
+    assert diagnostics["residuals"] is not None
+    assert set(diagnostics["residuals"]) == {
+        "stationarity",
+        "dynamics",
+        "inequality",
+        "complementarity",
+    }
+    assert diagnostics["sqp_iterations"] == sol.iterations
+    assert diagnostics["timings"]["time_tot"] == sol.solver_time_to_optimize
+    assert diagnostics["raw_statistics"].ndim == 2
+    if solver_mode == "SQP_WITH_FEASIBLE_QP":
+        assert diagnostics["qp_status"].ndim == 2
+        assert diagnostics["qp_iterations_per_solve"].shape[1] == 3
+
+    copied_solution = sol.copy(skip_data=True)
+    assert copied_solution.status == sol.status
+    assert copied_solution.solver_diagnostics is not diagnostics
+    npt.assert_equal(
+        copied_solution.solver_diagnostics["raw_statistics"],
+        diagnostics["raw_statistics"],
+    )
 
     acados_options = ocp.ocp_solver.acados_ocp.solver_options
     if solver_mode == "ANDERSON":
