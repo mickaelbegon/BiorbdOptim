@@ -54,7 +54,7 @@ jobs:
         with:
           repository: mickaelbegon/libMad
           ref: ${{ env.LIBMAD_COMMIT }}
-          path: .cache/libMad-src
+          path: .cache/libMad
 
       - name: Checkout CasADi 3.8
         uses: actions/checkout@v4
@@ -83,9 +83,9 @@ jobs:
 
       - name: Build PARDISO-enabled libMad
         run: |
-          julia --project=.cache/libMad-src -e 'using Pkg; Pkg.instantiate()'
+          julia --project=.cache/libMad -e 'using Pkg; Pkg.instantiate()'
           cmake \
-            -S .cache/libMad-src \
+            -S .cache/libMad \
             -B .cache/libMad-build \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
