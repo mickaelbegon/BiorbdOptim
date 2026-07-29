@@ -1,3 +1,4 @@
+from copy import deepcopy
 from time import perf_counter
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from ..misc.enums import Node, SolverType, PhaseDynamics
 from ..limits.objective_functions import ObjectiveFunction, ObjectiveFcn
 from ..limits.path_conditions import Bounds
 from ..misc.enums import InterpolationType
+from ..optimization.solution.solution import Solution
 
 
 from ..misc.parameters_types import (
@@ -21,7 +23,6 @@ from ..misc.parameters_types import (
     Bool,
     AnyListorDict,
 )
-
 
 _ACADOS_TIMING_FIELDS = (
     "time_tot",
@@ -38,6 +39,9 @@ _ACADOS_TIMING_FIELDS = (
     "time_preparation",
     "time_feedback",
 )
+
+_ACADOS_WARM_START_FIELDS = ("x", "u", "pi", "lam", "sl", "su")
+_ACADOS_SOLVER_STATE_FORMAT_VERSION = 1
 
 
 def _get_acados_runtime_parameters(nlp) -> np.ndarray:
@@ -299,6 +303,7 @@ class AcadosInterface(SolverInterface):
         self.out = {}
         self.real_time_to_optimize = -1
         self._runtime_parameter_values = None
+        self._warm_start_solver_state = None
 
         self.all_constr = None
         self.end_constr = SX()
@@ -1083,6 +1088,7 @@ class AcadosInterface(SolverInterface):
             "status": self.status,
             "solver": SolverType.ACADOS,
             "solver_diagnostics": diagnostics,
+            "solver_state": self.get_solver_state(),
         }
 
         out["x"] = vertcat(out["x"], acados_x.reshape(-1, 1, order="F"))
@@ -1100,6 +1106,78 @@ class AcadosInterface(SolverInterface):
             out.append(self.out[key])
 
         return out[0] if len(out) == 1 else out
+
+    def get_solver_state(self) -> dict | None:
+        """
+        Capture a detached Acados primal-dual iterate for an exact warm start.
+
+        The payload is intentionally opaque to the generic Solution API. Algebraic
+        variables are not included until the Acados interface supports them.
+        """
+
+        if self.ocp_solver is None:
+            return None
+
+        iterate = self.ocp_solver.get_flat_iterate()
+        return {
+            "solver": SolverType.ACADOS.value,
+            "format_version": _ACADOS_SOLVER_STATE_FORMAT_VERSION,
+            "n_horizon": self.acados_ocp.solver_options.N_horizon,
+            "iterate": {
+                field: np.asarray(getattr(iterate, field), dtype=float).copy() for field in _ACADOS_WARM_START_FIELDS
+            },
+        }
+
+    def set_lagrange_multiplier(self, sol: Solution) -> None:
+        """
+        Queue the Acados solver state carried by a Solution for the next solve.
+
+        This method implements the common Bioptim warm-start hook. When the
+        Solution has no Acados state, the existing state/control initial-guess
+        path remains active and no dual iterate is restored.
+        """
+
+        solver_state = sol.solver_state
+        if solver_state is None:
+            self._warm_start_solver_state = None
+            return
+
+        if not isinstance(solver_state, dict) or solver_state.get("solver") != SolverType.ACADOS.value:
+            raise ValueError("The warm-start solver state is not an Acados state.")
+        if solver_state.get("format_version") != _ACADOS_SOLVER_STATE_FORMAT_VERSION:
+            raise ValueError(
+                "Unsupported Acados warm-start state format "
+                f"{solver_state.get('format_version')}; expected {_ACADOS_SOLVER_STATE_FORMAT_VERSION}."
+            )
+        if solver_state.get("n_horizon") != self.acados_ocp.solver_options.N_horizon:
+            raise ValueError(
+                "The Acados warm-start state uses a different number of shooting intervals. "
+                "Grid-changing warm starts require interpolation and are not implemented yet."
+            )
+
+        iterate = solver_state.get("iterate")
+        if not isinstance(iterate, dict) or any(field not in iterate for field in _ACADOS_WARM_START_FIELDS):
+            raise ValueError("The Acados warm-start state must contain x, u, pi, lam, sl, and su flattened iterates.")
+        self._warm_start_solver_state = deepcopy(solver_state)
+
+    def __restore_solver_state(self) -> None:
+        """Restore the queued Acados iterate after numerical inputs and primal guesses are updated."""
+
+        if self._warm_start_solver_state is None:
+            return
+
+        solver_state = self._warm_start_solver_state
+        self._warm_start_solver_state = None
+        for field in _ACADOS_WARM_START_FIELDS:
+            values = np.ascontiguousarray(solver_state["iterate"][field], dtype=float)
+            expected_size = self.ocp_solver.get_dim_flat(field)
+            if values.ndim != 1 or values.shape[0] != expected_size:
+                raise ValueError(
+                    f"The Acados warm-start field '{field}' has size {values.size}; expected {expected_size}. "
+                    "The solver structure must match exactly for a primal-dual warm start."
+                )
+            if expected_size:
+                self.ocp_solver.set_flat(field, values)
 
     def get_diagnostics(self) -> dict:
         """
@@ -1186,6 +1264,7 @@ class AcadosInterface(SolverInterface):
                 self.opts.set_has_tolerance_changed(False)
 
         self.__update_solver()
+        self.__restore_solver_state()
         self.status = self.ocp_solver.solve()
         self.real_time_to_optimize = perf_counter() - tic
         return self.get_optimized_value()

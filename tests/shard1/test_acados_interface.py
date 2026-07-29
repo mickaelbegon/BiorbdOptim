@@ -182,6 +182,63 @@ def test_acados_v055_runtime_parameter_updates(tmp_path, monkeypatch):
     npt.assert_equal(acados_solver.get(4, "p"), [4.0, 16.0, -3.0, 22.0])
 
 
+def test_acados_v055_primal_dual_warm_start(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=5,
+        tf=1,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+
+    first_solution = ocp.solve(solver=solver)
+    assert first_solution.status == 0
+    solver_state = first_solution.solver_state
+    assert solver_state["solver"] == "ACADOS"
+    assert solver_state["format_version"] == 1
+    assert solver_state["n_horizon"] == 5
+    assert set(solver_state["iterate"]) == {"x", "u", "pi", "lam", "sl", "su"}
+
+    acados_solver = ocp.ocp_solver.ocp_solver
+    expected_iterate = {field: values.copy() for field, values in solver_state["iterate"].items()}
+    for field, values in expected_iterate.items():
+        assert values.ndim == 1
+        assert values.shape[0] == acados_solver.get_dim_flat(field)
+        if values.size:
+            acados_solver.set_flat(field, np.zeros_like(values))
+
+    # The Solution owns detached arrays, not views into the mutable Acados capsule.
+    for field, values in expected_iterate.items():
+        npt.assert_equal(first_solution.solver_state["iterate"][field], values)
+
+    iterate_before_solve = {}
+    original_solve = acados_solver.solve
+
+    def solve_after_recording_iterate():
+        for field in expected_iterate:
+            iterate_before_solve[field] = acados_solver.get_flat(field)
+        return original_solve()
+
+    with patch.object(acados_solver, "solve", side_effect=solve_after_recording_iterate):
+        second_solution = ocp.solve(solver=solver, warm_start=first_solution)
+
+    assert second_solution.status == 0
+    for field, values in expected_iterate.items():
+        npt.assert_equal(iterate_before_solve[field], values)
+
+    copied_solution = first_solution.copy(skip_data=True)
+    assert copied_solution.solver_state is not first_solution.solver_state
+    for field, values in expected_iterate.items():
+        npt.assert_equal(copied_solution.solver_state["iterate"][field], values)
+
+
 def test_acados_v055_code_reuse_and_reset(tmp_path, monkeypatch):
     if platform == "win32":
         return
