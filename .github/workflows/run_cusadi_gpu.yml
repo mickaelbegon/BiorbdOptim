@@ -27,7 +27,7 @@ permissions:
 
 jobs:
   codegen:
-    name: Validate CusADi code generation
+    name: Validate CusADi CUDA compilation
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -56,16 +56,27 @@ jobs:
           git clone https://github.com/se-hwan/cusadi.git "$CUSADI_ROOT"
           git -C "$CUSADI_ROOT" checkout "$CUSADI_REF"
 
-      - name: Generate CUDA source from bioptim dynamics
+      - name: Install CUDA compiler
+        run: |
+          mamba install --yes \
+            --channel nvidia/label/cuda-12.6.3 \
+            cuda-nvcc \
+            cuda-cudart-dev
+          nvcc --version
+
+      - name: Generate and compile CUDA source from bioptim dynamics
         run: |
           python bioptim/examples/toy_examples/gpu/cusadi_pendulum_benchmark.py \
-            --codegen-only
+            --compile-only \
+            --cuda-architectures 75,86
 
-      - name: Upload generated CUDA source
+      - name: Upload generated CUDA source and library
         uses: actions/upload-artifact@v4
         with:
-          name: cusadi-generated-cuda
-          path: ${{ env.CUSADI_ROOT }}/codegen/ForwardDyn.cu
+          name: cusadi-compiled-cuda
+          path: |
+            ${{ env.CUSADI_ROOT }}/codegen/ForwardDyn.cu
+            ${{ env.CUSADI_ROOT }}/build/libForwardDyn.so
           if-no-files-found: error
 
   benchmark:

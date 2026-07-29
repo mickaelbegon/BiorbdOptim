@@ -63,6 +63,16 @@ def _parse_batch_sizes(value: str) -> list[int]:
     return batch_sizes
 
 
+def _parse_cuda_architectures(value: str) -> list[int]:
+    try:
+        architectures = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("CUDA architectures must be comma-separated integers") from exc
+    if not architectures or any(architecture < 50 for architecture in architectures):
+        raise argparse.ArgumentTypeError("CUDA architectures must use values such as 75, 86, or 90")
+    return architectures
+
+
 def _run(command: list[str], cwd: Path | None = None) -> str:
     process = subprocess.run(
         command,
@@ -191,7 +201,7 @@ def _generate_cuda_source(dynamics: casadi.Function, cusadi_root: Path) -> tuple
     return cuda_source, used_operation_names
 
 
-def _write_cmake_project(cusadi_root: Path, function_name: str, cuda_architecture: int) -> None:
+def _write_cmake_project(cusadi_root: Path, function_name: str, cuda_architectures: list[int]) -> None:
     """
     Write a minimal architecture-aware build for the generated kernel.
 
@@ -200,12 +210,13 @@ def _write_cmake_project(cusadi_root: Path, function_name: str, cuda_architectur
     benchmark work on Turing, Ampere, Ada, and newer CUDA devices.
     """
 
+    architecture_list = ";".join(map(str, cuda_architectures))
     cmake_contents = f"""cmake_minimum_required(VERSION 3.18)
 project(BioptimCusADIBenchmark LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CUDA_STANDARD 11)
-set(CMAKE_CUDA_ARCHITECTURES {cuda_architecture})
+set(CMAKE_CUDA_ARCHITECTURES {architecture_list})
 
 add_library({function_name} SHARED codegen/{function_name}.cu)
 target_compile_options(
@@ -218,13 +229,14 @@ target_compile_options(
     (cusadi_root / "CMakeLists.txt").write_text(cmake_contents, encoding="utf-8")
 
 
-def _compile_cuda_source(cusadi_root: Path, function_name: str, cuda_architecture: int) -> Path:
+def _compile_cuda_source(cusadi_root: Path, function_name: str, cuda_architectures: list[int]) -> Path:
     if shutil.which("cmake") is None:
         raise RuntimeError("cmake is required to compile the generated CUDA source")
     if shutil.which("nvcc") is None:
         raise RuntimeError("nvcc is required; install the NVIDIA CUDA toolkit and add it to PATH")
 
-    _write_cmake_project(cusadi_root, function_name, cuda_architecture)
+    architecture_list = ";".join(map(str, cuda_architectures))
+    _write_cmake_project(cusadi_root, function_name, cuda_architectures)
     build_directory = cusadi_root / "build"
     _run(
         [
@@ -234,7 +246,7 @@ def _compile_cuda_source(cusadi_root: Path, function_name: str, cuda_architectur
             "-B",
             str(build_directory),
             "-DCMAKE_BUILD_TYPE=Release",
-            f"-DCMAKE_CUDA_ARCHITECTURES={cuda_architecture}",
+            f"-DCMAKE_CUDA_ARCHITECTURES={architecture_list}",
         ]
     )
     _run(["cmake", "--build", str(build_directory), "--parallel"])
@@ -505,10 +517,22 @@ def _parser() -> argparse.ArgumentParser:
         default=Path("cusadi_benchmark_results.json"),
         help="JSON result path",
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--codegen-only",
         action="store_true",
         help="Stop after compatibility checking and CUDA source generation; no GPU is required",
+    )
+    mode.add_argument(
+        "--compile-only",
+        action="store_true",
+        help="Generate and compile the CUDA source without loading or running it; no GPU or driver is required",
+    )
+    parser.add_argument(
+        "--cuda-architectures",
+        type=_parse_cuda_architectures,
+        default=_parse_cuda_architectures("75,86"),
+        help="Comma-separated CUDA compute capabilities for --compile-only (default: 75,86)",
     )
     return parser
 
@@ -528,10 +552,19 @@ def main() -> None:
 
     if platform.system() != "Linux":
         raise RuntimeError("The GPU benchmark requires Linux; use --codegen-only on other platforms")
+    if args.compile_only:
+        library = _compile_cuda_source(
+            cusadi_root,
+            dynamics.name(),
+            args.cuda_architectures,
+        )
+        print(f"Compiled CUDA library: {library}")
+        return
+
     torch = _import_torch()
     capability = torch.cuda.get_device_capability()
     cuda_architecture = capability[0] * 10 + capability[1]
-    _compile_cuda_source(cusadi_root, dynamics.name(), cuda_architecture)
+    _compile_cuda_source(cusadi_root, dynamics.name(), [cuda_architecture])
 
     results = [
         _benchmark_batch(

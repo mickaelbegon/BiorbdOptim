@@ -70,10 +70,28 @@ Successful code generation means that CusADi implements every scalar CasADi
 operation used by this dynamics function. It does not validate CUDA
 compilation, numerical equivalence, or performance.
 
+## Compile without a GPU
+
+On a CPU-only Linux machine with the CUDA Toolkit installed, the generated
+kernel can also be compiled without an NVIDIA device or driver:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_pendulum_benchmark.py \
+    --cusadi-root /tmp/cusadi \
+    --compile-only \
+    --cuda-architectures 75,86
+```
+
+This produces `build/libForwardDyn.so` for Tesla T4 (`sm_75`) and Ampere
+(`sm_86`). Loading the library, validating its numerical output, and measuring
+performance still require a CUDA-capable GPU.
+
 ## GitHub Actions
 
 Every push to the experiment branch runs the code-generation check on a
-standard Linux runner and uploads the generated `ForwardDyn.cu` source.
+standard Linux runner, installs a minimal CUDA 12.6 compiler, builds the
+generated source for `sm_75` and `sm_86`, and uploads both `ForwardDyn.cu` and
+`libForwardDyn.so`.
 
 The GPU benchmark job defaults to a self-hosted runner labelled `gpu`:
 
