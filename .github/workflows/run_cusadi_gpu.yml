@@ -34,7 +34,7 @@ jobs:
       run:
         shell: bash -l {0}
     env:
-      CUSADI_ROOT: ${{ runner.temp }}/cusadi-${{ github.run_id }}
+      CUSADI_ROOT: ${{ github.workspace }}/.cusadi-${{ github.run_id }}
 
     steps:
       - name: Checkout bioptim
@@ -77,7 +77,7 @@ jobs:
       run:
         shell: bash -l {0}
     env:
-      CUSADI_ROOT: ${{ runner.temp }}/cusadi-${{ github.run_id }}
+      CUSADI_ROOT: ${{ github.workspace }}/.cusadi-${{ github.run_id }}
 
     steps:
       - name: Checkout bioptim
