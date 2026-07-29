@@ -1,0 +1,126 @@
+name: CusADi GPU benchmark
+
+on:
+  push:
+    branches:
+      - codex/issue-1094-cusadi-gpu
+  workflow_dispatch:
+    inputs:
+      runs_on:
+        description: JSON runner label or label array
+        required: true
+        type: string
+        default: '["self-hosted", "linux", "x64", "gpu"]'
+      cusadi_ref:
+        description: CusADi branch, tag, or commit
+        required: true
+        type: string
+        default: main
+      batch_sizes:
+        description: Comma-separated batch sizes
+        required: true
+        type: string
+        default: 1,32,256,2048,16384
+
+permissions:
+  contents: read
+
+jobs:
+  codegen:
+    name: Validate CusADi code generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      CUSADI_ROOT: ${{ runner.temp }}/cusadi-${{ github.run_id }}
+
+    steps:
+      - name: Checkout bioptim
+        uses: actions/checkout@v4
+
+      - name: Setup bioptim environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          use-mamba: true
+          environment-file: environment.yml
+          activate-environment: bioptim
+
+      - name: Install bioptim and clone CusADi
+        env:
+          CUSADI_REF: ${{ inputs.cusadi_ref || 'main' }}
+        run: |
+          python -m pip install -e .
+          git clone https://github.com/se-hwan/cusadi.git "$CUSADI_ROOT"
+          git -C "$CUSADI_ROOT" checkout "$CUSADI_REF"
+
+      - name: Generate CUDA source from bioptim dynamics
+        run: |
+          python bioptim/examples/toy_examples/gpu/cusadi_pendulum_benchmark.py \
+            --codegen-only
+
+      - name: Upload generated CUDA source
+        uses: actions/upload-artifact@v4
+        with:
+          name: cusadi-generated-cuda
+          path: ${{ env.CUSADI_ROOT }}/codegen/ForwardDyn.cu
+          if-no-files-found: error
+
+  benchmark:
+    name: Pendulum dynamics on CUDA
+    if: ${{ github.event_name == 'workflow_dispatch' || vars.CUSADI_GPU_ENABLED == 'true' }}
+    runs-on: ${{ fromJSON(inputs.runs_on || vars.CUSADI_GPU_RUNS_ON || '["self-hosted", "linux", "x64", "gpu"]') }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      CUSADI_ROOT: ${{ runner.temp }}/cusadi-${{ github.run_id }}
+
+    steps:
+      - name: Checkout bioptim
+        uses: actions/checkout@v4
+
+      - name: Check NVIDIA GPU and CUDA compiler
+        run: |
+          nvidia-smi
+          nvcc --version
+
+      - name: Setup bioptim environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          use-mamba: true
+          environment-file: environment.yml
+          activate-environment: bioptim
+
+      - name: Install benchmark dependencies
+        env:
+          CUSADI_REF: ${{ inputs.cusadi_ref || 'main' }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --no-cache-dir torch
+          python -m pip install -e .
+          git clone https://github.com/se-hwan/cusadi.git "$CUSADI_ROOT"
+          git -C "$CUSADI_ROOT" checkout "$CUSADI_REF"
+          python -m pip install -e "$CUSADI_ROOT"
+
+      - name: Run numerical validation and benchmark
+        env:
+          BATCH_SIZES: ${{ inputs.batch_sizes || '1,32,256,2048,16384' }}
+        run: |
+          python bioptim/examples/toy_examples/gpu/cusadi_pendulum_benchmark.py \
+            --batch-sizes "$BATCH_SIZES" \
+            --warmup 5 \
+            --repeats 20 \
+            --output benchmark-results/cusadi_benchmark_results.json
+
+      - name: Upload benchmark measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cusadi-gpu-benchmark
+          path: benchmark-results/cusadi_benchmark_results.json
+          if-no-files-found: warn
