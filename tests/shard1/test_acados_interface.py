@@ -7,6 +7,7 @@ It tests the results of an optimal control problem with acados regarding the pro
 import os
 import shutil
 from sys import platform
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -1155,6 +1156,93 @@ def test_acados_terminal_state_initial_guess_uses_scaled_units():
         physical_value = np.asarray(nlp.x_init[key].init.evaluate_at(nlp.ns), dtype=float).reshape(-1)
         scaling = np.asarray(nlp.x_scaling[key].scaling[:, 0], dtype=float).reshape(-1)
         npt.assert_allclose(terminal_guess[index], physical_value / scaling, rtol=0, atol=0)
+
+
+def test_acados_update_solver_sets_terminal_guess_in_scaled_units():
+    pytest.importorskip("acados_template")
+    from bioptim.interfaces.acados_interface import AcadosInterface
+
+    class Variables(dict):
+        def __init__(self, values, shape):
+            super().__init__(values)
+            self.shape = shape
+
+    class InitialGuess:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+
+        def check_and_adjust_dimensions(self, *_args):
+            pass
+
+        @property
+        def init(self):
+            values = self.values
+
+            class Evaluator:
+                def evaluate_at(self, node):
+                    return values[:, node]
+
+            return Evaluator()
+
+    class FakeSolver:
+        def __init__(self):
+            self.set_calls = []
+
+        def set(self, node, field, value):
+            self.set_calls.append((node, field, np.asarray(value, dtype=float).copy()))
+
+        def constraints_set(self, *_args):
+            pass
+
+    controls = Variables({}, shape=0)
+    nlp = SimpleNamespace(
+        ns=1,
+        states=Variables({"q": SimpleNamespace(index=[0, 1], shape=2)}, shape=2),
+        controls=controls,
+        x_init={"q": InitialGuess([[2.0, 6.0], [8.0, 20.0]])},
+        x_scaling={"q": SimpleNamespace(scaling=np.array([[2.0], [4.0]]))},
+        u_init={},
+        u_scaling={},
+        u_bounds={},
+    )
+    fake_solver = FakeSolver()
+    interface = SimpleNamespace(
+        _AcadosInterface__update_runtime_parameters=lambda: None,
+        ocp=SimpleNamespace(
+            nlp=[nlp],
+            parameter_init={},
+            parameters={},
+        ),
+        acados_ocp=SimpleNamespace(
+            solver_options=SimpleNamespace(N_horizon=1),
+            dims=SimpleNamespace(nu=0),
+        ),
+        ocp_solver=fake_solver,
+        y_ref_start=[],
+        y_ref=[],
+        y_ref_end=[],
+        x_bound_min=np.zeros((2, 3)),
+        x_bound_max=np.zeros((2, 3)),
+        start_g_bounds=SimpleNamespace(
+            min=np.empty((0, 1)), max=np.empty((0, 1))
+        ),
+        all_g_bounds=SimpleNamespace(
+            min=np.empty((0, 1)), max=np.empty((0, 1))
+        ),
+        end_g_bounds=SimpleNamespace(
+            min=np.empty((0, 1)), max=np.empty((0, 1))
+        ),
+    )
+
+    AcadosInterface._AcadosInterface__update_solver(interface)
+
+    state_sets = {
+        node: value
+        for node, field, value in fake_solver.set_calls
+        if field == "x"
+    }
+    npt.assert_allclose(state_sets[0], [1.0, 2.0], rtol=0, atol=0)
+    npt.assert_allclose(state_sets[1], [3.0, 5.0], rtol=0, atol=0)
 
 
 def test_acados_constraints_end_all():
