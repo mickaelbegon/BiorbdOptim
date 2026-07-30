@@ -180,8 +180,9 @@ def _configure_acados_codegen(acados_ocp: AcadosOcp, solver_options: Solver.ACAD
         code_gen_options.acados_include_path = str(acados_dir / "include")
         code_gen_options.acados_lib_path = str(acados_dir / "lib")
 
-    code_gen_options.code_export_directory = solver_options.c_generated_code_path
-    code_gen_options.json_file = "acados_ocp.json"
+    code_export_directory = Path(solver_options.c_generated_code_path).expanduser().resolve()
+    code_gen_options.code_export_directory = str(code_export_directory)
+    code_gen_options.json_file = str(code_export_directory / "acados_ocp.json")
 
 
 class AcadosInterface(SolverInterface):
@@ -406,7 +407,10 @@ class AcadosInterface(SolverInterface):
         self.acados_ocp.dims.nu = ocp.nlp[0].controls.shape
         self.acados_ocp.solver_options.N_horizon = ocp.nlp[0].ns
         runtime_parameters = _get_acados_runtime_parameters(ocp.nlp[0])
-        self.acados_ocp.parameter_values = runtime_parameters[:, 0].copy()
+        # Keep code-generation metadata independent of mutable numerical data.
+        # Every stage receives the current values in __update_runtime_parameters
+        # before the first solve, including when an existing library is reused.
+        self.acados_ocp.parameter_values = np.zeros(runtime_parameters.shape[0])
 
     def __set_constr_type(self, constr_type: Str = "BGH") -> None:
         """

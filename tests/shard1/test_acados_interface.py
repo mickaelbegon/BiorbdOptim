@@ -128,7 +128,7 @@ def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
     assert acados_ocp.code_gen_options.acados_include_path == str(acados_root / "include")
     assert acados_ocp.code_gen_options.acados_lib_path == str(acados_root / "lib")
     assert acados_ocp.code_gen_options.code_export_directory == str(generated_code)
-    assert acados_ocp.code_gen_options.json_file == "acados_ocp.json"
+    assert acados_ocp.code_gen_options.json_file == str(generated_code / "acados_ocp.json")
 
 
 def test_acados_v055_runtime_parameter_updates(tmp_path, monkeypatch):
@@ -180,6 +180,59 @@ def test_acados_v055_runtime_parameter_updates(tmp_path, monkeypatch):
     assert sparse_update.call_count == 2
     npt.assert_equal(acados_solver.get(2, "p"), [2.0, 42.0, 8.0, 20.0])
     npt.assert_equal(acados_solver.get(4, "p"), [4.0, 16.0, -3.0, 22.0])
+
+
+def test_acados_v055_runtime_parameter_values_do_not_invalidate_code_reuse(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim import OptimalControlProgram
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    generated_code = tmp_path / "runtime_parameter_reuse"
+    n_shooting = 5
+
+    def solve_with_runtime_data(runtime_data):
+        model = TorqueBiorbdModel(bioptim_folder + "/examples/models/cube_acados.bioMod")
+        dynamics = DynamicsOptions(
+            ode_solver=OdeSolver.RK4(),
+            expand_dynamics=True,
+            numerical_data_timeseries={"runtime_data": runtime_data},
+        )
+        x_bounds = BoundsList()
+        x_bounds["q"] = model.bounds_from_ranges("q")
+        x_bounds["qdot"] = model.bounds_from_ranges("qdot")
+        u_bounds = BoundsList()
+        u_bounds["tau"] = [-100] * model.nb_tau, [100] * model.nb_tau
+        ocp = OptimalControlProgram(
+            model,
+            n_shooting,
+            1,
+            dynamics=dynamics,
+            x_bounds=x_bounds,
+            u_bounds=u_bounds,
+            use_sx=True,
+        )
+        solver = Solver.ACADOS()
+        solver.set_acados_model_name("runtime_parameter_reuse")
+        solver.set_c_generated_code_path(str(generated_code))
+        solver.set_check_reuse_possible(True)
+        solution = ocp.solve(solver)
+        assert solution.status == 0
+        return ocp
+
+    first_data = np.zeros((2, 2, n_shooting + 1))
+    first_ocp = solve_with_runtime_data(first_data)
+    assert first_ocp.ocp_solver.ocp_solver.generated
+
+    second_data = np.arange(4 * (n_shooting + 1), dtype=float).reshape((2, 2, n_shooting + 1))
+    reused_ocp = solve_with_runtime_data(second_data)
+    assert not reused_ocp.ocp_solver.ocp_solver.generated
+
+    expected_runtime_data = np.vstack((second_data[:, 0, :], second_data[:, 1, :]))
+    for stage in range(n_shooting + 1):
+        npt.assert_equal(reused_ocp.ocp_solver.ocp_solver.get(stage, "p"), expected_runtime_data[:, stage])
 
 
 def test_acados_v055_primal_dual_warm_start(tmp_path, monkeypatch):
