@@ -1199,6 +1199,7 @@ def test_acados_update_solver_sets_terminal_guess_in_scaled_units():
         ns=1,
         states=Variables({"q": SimpleNamespace(index=[0, 1], shape=2)}, shape=2),
         controls=controls,
+        parameters=Variables({}, shape=0),
         x_init={"q": InitialGuess([[2.0, 6.0], [8.0, 20.0]])},
         x_scaling={"q": SimpleNamespace(scaling=np.array([[2.0], [4.0]]))},
         u_init={},
