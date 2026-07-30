@@ -64,6 +64,19 @@ def _get_acados_runtime_parameters(nlp) -> np.ndarray:
     return np.vstack(runtime_parameters) if runtime_parameters else np.zeros((0, nlp.ns + 1))
 
 
+def _scaled_state_initial_guess(nlp, node: int) -> np.ndarray:
+    """Return one state initial-guess node in ACADOS decision-variable units."""
+
+    x_init = np.empty((nlp.states.shape,))
+    for key in nlp.states.keys():
+        index = nlp.states[key].index
+        nlp.x_init[key].check_and_adjust_dimensions(nlp.states[key].shape, nlp.ns)
+        physical_value = np.asarray(nlp.x_init[key].init.evaluate_at(node), dtype=float).reshape(-1)
+        scaling = np.asarray(nlp.x_scaling[key].scaling[:, 0], dtype=float).reshape(-1)
+        x_init[index] = physical_value / scaling
+    return x_init
+
+
 def _safe_acados_stat(acados_solver: AcadosOcpSolver, field: Str, errors: dict) -> int | float | np.ndarray | None:
     """Read a diagnostic value without masking an otherwise usable solve."""
 
@@ -1013,15 +1026,7 @@ class AcadosInterface(SolverInterface):
             # self.ocp_solver.cost_set(n, "W", self.W)
 
             # The x_init need to be ordered by index that's why we use a for loop
-            x_init = np.ndarray((self.ocp.nlp[0].states.shape))
-            for key in self.ocp.nlp[0].states.keys():
-                index = self.ocp.nlp[0].states[key].index
-                self.ocp.nlp[0].x_init[key].check_and_adjust_dimensions(
-                    self.ocp.nlp[0].states[key].shape, self.ocp.nlp[0].ns
-                )
-                x_init[index] = (
-                    self.ocp.nlp[0].x_init[key].init.evaluate_at(n) / self.ocp.nlp[0].x_scaling[key].scaling[:, 0]
-                )
+            x_init = _scaled_state_initial_guess(self.ocp.nlp[0], n)
 
             self.ocp_solver.set(n, "x", np.concatenate((param_init, x_init)))
 
@@ -1077,10 +1082,7 @@ class AcadosInterface(SolverInterface):
             self.ocp_solver.constraints_set(self.acados_ocp.solver_options.N_horizon, "lh", self.end_g_bounds.min[:, 0])
 
         # The x_init need to be ordered by index that's why we use a for loop
-        x_init = np.ndarray((self.ocp.nlp[0].states.shape,))
-        for key in self.ocp.nlp[0].states.keys():
-            index = self.ocp.nlp[0].states[key].index
-            x_init[index] = self.ocp.nlp[0].x_init[key].init.evaluate_at(self.acados_ocp.solver_options.N_horizon)
+        x_init = _scaled_state_initial_guess(self.ocp.nlp[0], self.acados_ocp.solver_options.N_horizon)
 
         self.ocp_solver.set(self.acados_ocp.solver_options.N_horizon, "x", np.concatenate((param_init, x_init)))
 

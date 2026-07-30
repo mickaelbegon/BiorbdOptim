@@ -1135,6 +1135,28 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path, constraint_node)
         assert interface.acados_model.con_h_expr.shape[0] == 0
 
 
+def test_acados_terminal_state_initial_guess_uses_scaled_units():
+    pytest.importorskip("acados_template")
+    from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
+    from bioptim.interfaces.acados_interface import _scaled_state_initial_guess
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=5,
+        final_time=0.1,
+        use_sx=True,
+    )
+    nlp = ocp.nlp[0]
+    terminal_guess = _scaled_state_initial_guess(nlp, nlp.ns)
+
+    for key in nlp.states.keys():
+        index = nlp.states[key].index
+        physical_value = np.asarray(nlp.x_init[key].init.evaluate_at(nlp.ns), dtype=float).reshape(-1)
+        scaling = np.asarray(nlp.x_scaling[key].scaling[:, 0], dtype=float).reshape(-1)
+        npt.assert_allclose(terminal_guess[index], physical_value / scaling, rtol=0, atol=0)
+
+
 def test_acados_constraints_end_all():
     if platform == "win32":
         print("Test for ACADOS on Windows is skipped")
