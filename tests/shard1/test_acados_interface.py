@@ -12,6 +12,7 @@ from unittest.mock import patch
 import numpy as np
 import numpy.testing as npt
 import pytest
+from casadi import Function
 
 from bioptim import (
     TorqueBiorbdModel,
@@ -31,6 +32,10 @@ from bioptim import (
     SolutionMerge,
 )
 from tests.utils import TestUtils
+
+
+def _scaled_state_control_constraint(controller):
+    return controller.states["q"][1] + controller.controls["tau"][0]
 
 
 def test_acados_v055_diagnostics_snapshot():
@@ -1044,6 +1049,71 @@ def test_acados_constraints_all():
     # initial and final controls
     npt.assert_almost_equal(tau[:, 0], np.array((0.04483914, 9.90739842, 2.24951691, 0.78496612)), decimal=6)
     npt.assert_almost_equal(tau[:, -1], np.array((0.15945561, 10.03978178, -2.36075327, 0.07267697)), decimal=6)
+
+
+def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
+    """
+    ACADOS' model variables are scaled decision variables. Nonlinear penalty
+    functions must receive those same scaled symbols, otherwise Bioptim unscales
+    them a second time and exports a different constraint.
+    """
+
+    pytest.importorskip("acados_template")
+    from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
+    from bioptim.interfaces.acados_interface import AcadosInterface
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=5,
+        final_time=0.1,
+        use_sx=True,
+    )
+    constraints = ConstraintList()
+    constraints.add(
+        _scaled_state_control_constraint,
+        node=Node.ALL,
+        min_bound=-1e6,
+        max_bound=1e6,
+    )
+    ocp.update_constraints(constraints)
+
+    solver = Solver.ACADOS()
+    solver.set_c_generated_code_path(str(tmp_path / "scaled_constraint"))
+    interface = AcadosInterface(ocp, solver)
+    interface._AcadosInterface__set_constraints(ocp)
+
+    nlp = ocp.nlp[0]
+    penalty = next(constraint for constraint in nlp.g if constraint)
+    expected_expression = penalty.function[0](
+        nlp.time_cx,
+        nlp.dt,
+        nlp.states.scaled.cx_start,
+        nlp.controls.scaled.cx_start,
+        nlp.parameters.scaled.cx,
+        nlp.algebraic_states.scaled.cx_start,
+        nlp.numerical_timeseries.cx,
+    )
+    expected = Function(
+        "expected_scaled_constraint",
+        [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+        [expected_expression],
+    )
+    exported = Function(
+        "exported_scaled_constraint",
+        [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+        [interface.all_constr],
+    )
+
+    scaled_x = np.array([0.25, -0.5, 0.1, -0.2])
+    scaled_u = np.array([0.02, 0.3])
+    numerical_parameters = np.zeros(interface.acados_model.p.shape[0])
+    npt.assert_allclose(
+        exported(scaled_x, scaled_u, numerical_parameters),
+        expected(scaled_x, scaled_u, numerical_parameters),
+        rtol=0,
+        atol=1e-12,
+    )
 
 
 def test_acados_constraints_end_all():

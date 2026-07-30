@@ -478,10 +478,14 @@ class AcadosInterface(SolverInterface):
         for i, nlp in enumerate(ocp.nlp):
             t = nlp.time_cx
             dt = nlp.dt
-            x = nlp.states.cx_start
-            u = nlp.controls.cx_start
+            # Penalty functions are declared with the scaled optimization variables
+            # as inputs (see PenaltyOption.get_variable_inputs). Passing their
+            # unscaled counterparts here would therefore apply the variable scaling
+            # a second time inside the penalty function.
+            x = nlp.states.scaled.cx_start
+            u = nlp.controls.scaled.cx_start
             p = nlp.parameters.scaled.cx
-            a = nlp.algebraic_states.cx_start
+            a = nlp.algebraic_states.scaled.cx_start
             d = nlp.numerical_timeseries.cx
 
             for g, G in enumerate(nlp.g):
