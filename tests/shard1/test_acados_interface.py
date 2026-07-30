@@ -34,7 +34,7 @@ from bioptim import (
 from tests.utils import TestUtils
 
 
-def _scaled_state_control_constraint(controller):
+def _physical_state_control_constraint_with_scaling(controller):
     return controller.states["q"][1] + controller.controls["tau"][0]
 
 
@@ -1071,7 +1071,7 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
     )
     constraints = ConstraintList()
     constraints.add(
-        _scaled_state_control_constraint,
+        _physical_state_control_constraint_with_scaling,
         node=Node.ALL,
         min_bound=-1e6,
         max_bound=1e6,
@@ -1108,8 +1108,10 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
     scaled_x = np.array([0.25, -0.5, 0.1, -0.2])
     scaled_u = np.array([0.02, 0.3])
     numerical_parameters = np.zeros(interface.acados_model.p.shape[0])
+    exported_value = exported(scaled_x, scaled_u, numerical_parameters)
+    npt.assert_allclose(exported_value, 16.5, rtol=0, atol=1e-12)
     npt.assert_allclose(
-        exported(scaled_x, scaled_u, numerical_parameters),
+        exported_value,
         expected(scaled_x, scaled_u, numerical_parameters),
         rtol=0,
         atol=1e-12,
