@@ -1051,7 +1051,8 @@ def test_acados_constraints_all():
     npt.assert_almost_equal(tau[:, -1], np.array((0.15945561, 10.03978178, -2.36075327, 0.07267697)), decimal=6)
 
 
-def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
+@pytest.mark.parametrize("constraint_node", (Node.START, Node.ALL))
+def test_acados_constraints_use_scaled_penalty_inputs(tmp_path, constraint_node):
     """
     ACADOS' model variables are scaled decision variables. Nonlinear penalty
     functions must receive those same scaled symbols, otherwise Bioptim unscales
@@ -1072,7 +1073,7 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
     constraints = ConstraintList()
     constraints.add(
         _physical_state_control_constraint_with_scaling,
-        node=Node.ALL,
+        node=constraint_node,
         min_bound=-1e6,
         max_bound=1e6,
     )
@@ -1099,10 +1100,11 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
         [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
         [expected_expression],
     )
+    exported_expression = interface.start_constr if constraint_node == Node.START else interface.all_constr
     exported = Function(
         "exported_scaled_constraint",
         [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
-        [interface.all_constr],
+        [exported_expression],
     )
 
     scaled_x = np.array([0.25, -0.5, 0.1, -0.2])
@@ -1116,6 +1118,21 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path):
         rtol=0,
         atol=1e-12,
     )
+    if constraint_node == Node.START:
+        initial_export = Function(
+            "initial_exported_scaled_constraint",
+            [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+            [interface.acados_model.con_h_expr_0],
+        )
+        npt.assert_allclose(
+            initial_export(scaled_x, scaled_u, numerical_parameters),
+            exported_value,
+            rtol=0,
+            atol=1e-12,
+        )
+        npt.assert_equal(interface.acados_ocp.constraints.lh_0, [-1e6])
+        npt.assert_equal(interface.acados_ocp.constraints.uh_0, [1e6])
+        assert interface.acados_model.con_h_expr.shape[0] == 0
 
 
 def test_acados_constraints_end_all():

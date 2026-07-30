@@ -470,9 +470,11 @@ class AcadosInterface(SolverInterface):
                     "to a big value instead."
                 )
 
+        self.start_constr = SX()
         self.all_constr = SX()
         self.end_constr = SX()
         # TODO:change for more node flexibility on bounds
+        self.start_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         self.all_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         self.end_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         for i, nlp in enumerate(ocp.nlp):
@@ -492,7 +494,18 @@ class AcadosInterface(SolverInterface):
                 if not G:
                     continue
 
-                if G.node[0] == Node.ALL or G.node[0] == Node.ALL_SHOOTING:
+                if G.node[0] == Node.START:
+                    x_tp = x
+                    u_tp = u
+                    if x.shape[0] * 2 == G.function[0].size_in("x")[0]:
+                        x_tp = vertcat(x_tp, x_tp)
+                    if u.shape[0] * 2 == G.function[0].size_in("u")[0]:
+                        u_tp = vertcat(u_tp, u_tp)
+
+                    self.start_constr = vertcat(self.start_constr, G.function[0](t, dt, x_tp, u_tp, p, a, d))
+                    self.start_g_bounds.concatenate(G.bounds)
+
+                elif G.node[0] == Node.ALL or G.node[0] == Node.ALL_SHOOTING:
                     x_tp = x
                     u_tp = u
                     if x.shape[0] * 2 == G.function[0].size_in("x")[0]:
@@ -519,10 +532,11 @@ class AcadosInterface(SolverInterface):
 
                 else:
                     raise RuntimeError(
-                        "Except for states and controls, Acados solver only handles constraints on last or all nodes."
+                        "Except for states and controls, Acados solver only handles constraints on start, last, "
+                        "all-shooting, or all nodes."
                     )
 
-        self.acados_model.con_h_expr_0 = self.all_constr
+        self.acados_model.con_h_expr_0 = vertcat(self.start_constr, self.all_constr)
         self.acados_model.con_h_expr = self.all_constr
         self.acados_model.con_h_expr_e = self.end_constr
 
@@ -578,8 +592,12 @@ class AcadosInterface(SolverInterface):
         self.acados_ocp.dims.nbx_e = self.acados_ocp.dims.nx
 
         # setup algebraic constraint
-        self.acados_ocp.constraints.lh_0 = np.array(self.all_g_bounds.min[:, 0])
-        self.acados_ocp.constraints.uh_0 = np.array(self.all_g_bounds.max[:, 0])
+        self.acados_ocp.constraints.lh_0 = np.concatenate(
+            (np.array(self.start_g_bounds.min[:, 0]), np.array(self.all_g_bounds.min[:, 0]))
+        )
+        self.acados_ocp.constraints.uh_0 = np.concatenate(
+            (np.array(self.start_g_bounds.max[:, 0]), np.array(self.all_g_bounds.max[:, 0]))
+        )
         self.acados_ocp.constraints.lh = np.array(self.all_g_bounds.min[:, 0])
         self.acados_ocp.constraints.uh = np.array(self.all_g_bounds.max[:, 0])
         self.acados_ocp.constraints.lh_e = np.array(self.end_g_bounds.min[:, 0])
@@ -1024,8 +1042,20 @@ class AcadosInterface(SolverInterface):
             u_bounds_min, u_bounds_max = scaled_control_bounds(self.ocp.nlp[0])
             self.ocp_solver.constraints_set(n, "lbu", u_bounds_min)
             self.ocp_solver.constraints_set(n, "ubu", u_bounds_max)
-            self.ocp_solver.constraints_set(n, "uh", self.all_g_bounds.max[:, 0])
-            self.ocp_solver.constraints_set(n, "lh", self.all_g_bounds.min[:, 0])
+            if n == 0:
+                self.ocp_solver.constraints_set(
+                    n,
+                    "uh",
+                    np.concatenate((self.start_g_bounds.max[:, 0], self.all_g_bounds.max[:, 0])),
+                )
+                self.ocp_solver.constraints_set(
+                    n,
+                    "lh",
+                    np.concatenate((self.start_g_bounds.min[:, 0], self.all_g_bounds.min[:, 0])),
+                )
+            else:
+                self.ocp_solver.constraints_set(n, "uh", self.all_g_bounds.max[:, 0])
+                self.ocp_solver.constraints_set(n, "lh", self.all_g_bounds.min[:, 0])
 
         # Final
         if self.y_ref_end:
