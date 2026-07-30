@@ -160,8 +160,11 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         options = interface.opts.as_dict(interface)
 
         if interface.c_compile:
-            nlpsol("nlpsol", interface.solver_name.lower(), interface.nlp, options).generate_dependencies("nlp.c")
-            interface.shaked_ocp_solver = nlpsol("nlpsol", interface.solver_name, Importer("nlp.c", "shell"), options)
+            plugin_name = interface.solver_name.lower()
+            nlpsol("nlpsol", plugin_name, interface.nlp, options).generate_dependencies("nlp.c")
+            interface.shaked_ocp_solver = nlpsol(
+                "nlpsol", plugin_name, Importer("nlp.c", "shell"), options
+            )
         else:
             interface.shaked_ocp_solver = nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
 

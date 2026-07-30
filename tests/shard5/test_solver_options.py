@@ -32,6 +32,8 @@ def test_madnlp_solver_options(monkeypatch):
     solver.set_maximum_iterations(42)
     solver.set_print_level(1)
     solver.set_option_unsafe("exact", "hessian_approximation")
+    solver.set_c_compile(True)
+    assert solver.c_compile is True
     options = solver.as_dict(FakeSolver({"print_time": False}))
     assert options == {
         "madnlp": {

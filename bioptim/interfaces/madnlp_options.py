@@ -108,11 +108,7 @@ class MADNLP(GenericSolver):
         self._madnlp_options[name] = val
 
     def set_c_compile(self, val: Bool) -> None:
-        if val:
-            raise NotImplementedError(
-                "C compilation has not been validated with Bioptim and the current CasADi MadNLP plugin."
-            )
-        self._c_compile = False
+        self._c_compile = val
 
     def as_dict(self, solver) -> AnyDict:
         madnlp = {
