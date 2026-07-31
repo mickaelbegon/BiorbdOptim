@@ -156,6 +156,9 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
     }
     if interface.shaked_ocp_solver is None or not can_skip_shake_objectives or not can_skip_shake_constraints:
         interface.nlp = {"x": v, "f": sum1(interface.shaked_objectives), "g": interface.shaked_constraints}
+        # The symbolic constraint graph may have changed.  Do not let an
+        # evaluator cached for a previous RHO inspect a stale graph.
+        interface._initial_nlp_constraint_audit_function = None
         interface.c_compile = interface.opts.c_compile
         options = interface.opts.as_dict(interface)
 
@@ -174,10 +177,12 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         interface.limits["lam_x0"] = interface.lam_x
 
     # Solve the problem
-    tic = perf_counter()
     solver_limits = interface.limits
     if hasattr(interface, "solver_call_limits"):
         solver_limits = interface.solver_call_limits()
+    if interface.initial_nlp_audit_enabled:
+        interface.initial_nlp_audits.append(_evaluate_initial_nlp_audit(interface, solver_limits))
+    tic = perf_counter()
     interface.out = {"sol": interface.shaked_ocp_solver.call(solver_limits)}
     stats = interface.shaked_ocp_solver.stats()
     madnlp_stats = stats.get("madnlp", {})
@@ -205,6 +210,114 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         ]
         interface.options_common["iteration_callback"].eval(to_eval, enforce=True)
     return interface.out
+
+
+def _as_flat_float_array(values) -> np.ndarray:
+    """Return a copy in CasADi's column-major vector order."""
+
+    return np.asarray(values, dtype=float).reshape(-1, order="F").copy()
+
+
+def _json_bound(value: float) -> float | None:
+    """Keep audit payloads JSON-portable when a bound is infinite."""
+
+    return float(value) if np.isfinite(value) else None
+
+
+def _bound_violation_summary(values, lower_bounds, upper_bounds) -> AnyDict:
+    """Summarize bound violations without modifying the submitted vectors."""
+
+    values = _as_flat_float_array(values)
+    lower_bounds = _as_flat_float_array(lower_bounds)
+    upper_bounds = _as_flat_float_array(upper_bounds)
+    if values.size != lower_bounds.size or values.size != upper_bounds.size:
+        raise ValueError(
+            "Cannot audit NLP bounds with mismatched dimensions: "
+            f"values={values.size}, lower={lower_bounds.size}, upper={upper_bounds.size}."
+        )
+    if np.any(np.isnan(lower_bounds)) or np.any(np.isnan(upper_bounds)):
+        raise ValueError("Cannot audit NLP bounds containing NaN.")
+    if np.any(lower_bounds > upper_bounds):
+        raise ValueError("Cannot audit NLP bounds whose lower bound exceeds the upper bound.")
+
+    finite_values = bool(np.all(np.isfinite(values)))
+    if not finite_values:
+        return {
+            "size": int(values.size),
+            "finite": False,
+            "maximum_absolute_value": None,
+            "maximum_bound_violation": None,
+            "l1_bound_violation": None,
+            "l2_bound_violation": None,
+            "worst_index": None,
+            "worst_value": None,
+            "worst_lower_bound": None,
+            "worst_upper_bound": None,
+            "violation_counts": None,
+        }
+
+    lower_violations = np.zeros(values.size)
+    upper_violations = np.zeros(values.size)
+    finite_lower = np.isfinite(lower_bounds)
+    finite_upper = np.isfinite(upper_bounds)
+    lower_violations[finite_lower] = np.maximum(lower_bounds[finite_lower] - values[finite_lower], 0.0)
+    upper_violations[finite_upper] = np.maximum(values[finite_upper] - upper_bounds[finite_upper], 0.0)
+    violations = np.maximum(lower_violations, upper_violations)
+    worst_index = int(np.argmax(violations)) if violations.size else None
+    maximum_violation = float(violations[worst_index]) if worst_index is not None else 0.0
+    if maximum_violation == 0.0:
+        worst_index = None
+
+    return {
+        "size": int(values.size),
+        "finite": True,
+        "maximum_absolute_value": float(np.max(np.abs(values))) if values.size else 0.0,
+        "maximum_bound_violation": maximum_violation,
+        "l1_bound_violation": float(np.sum(violations)),
+        "l2_bound_violation": float(np.linalg.norm(violations)),
+        "worst_index": worst_index,
+        "worst_value": float(values[worst_index]) if worst_index is not None else None,
+        "worst_lower_bound": _json_bound(lower_bounds[worst_index]) if worst_index is not None else None,
+        "worst_upper_bound": _json_bound(upper_bounds[worst_index]) if worst_index is not None else None,
+        "violation_counts": {
+            "above_1e-12": int(np.count_nonzero(violations > 1e-12)),
+            "above_1e-8": int(np.count_nonzero(violations > 1e-8)),
+            "above_1e-5": int(np.count_nonzero(violations > 1e-5)),
+        },
+    }
+
+
+def _evaluate_initial_nlp_audit(interface: SolverInterface, solver_limits: AnyDict) -> AnyDict:
+    """Evaluate the exact canonical ``g(x0)`` immediately before a solve."""
+
+    tic = perf_counter()
+    evaluator_was_cached = interface._initial_nlp_constraint_audit_function is not None
+    if not evaluator_was_cached:
+        function_name = f"initial_nlp_g_{interface.solver_name.lower()}_{id(interface):x}"
+        interface._initial_nlp_constraint_audit_function = Function(
+            function_name,
+            [interface.nlp["x"]],
+            [interface.nlp["g"]],
+            ["x"],
+            ["g"],
+        )
+
+    g_at_initial = interface._initial_nlp_constraint_audit_function(x=solver_limits["x0"])["g"]
+    return {
+        "solver": interface.solver_name,
+        "constraint_function_was_cached": evaluator_was_cached,
+        "constraints": _bound_violation_summary(
+            g_at_initial,
+            solver_limits["lbg"],
+            solver_limits["ubg"],
+        ),
+        "variables": _bound_violation_summary(
+            solver_limits["x0"],
+            solver_limits["lbx"],
+            solver_limits["ubx"],
+        ),
+        "evaluation_time_s": perf_counter() - tic,
+    }
 
 
 def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayTuple, expand: Bool):

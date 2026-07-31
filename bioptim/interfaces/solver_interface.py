@@ -49,6 +49,20 @@ class SolverInterface:
         self.shaked_constraints = None
         self.shaked_ocp_solver = None
 
+        # Optional, solver-neutral diagnostics of the exact canonical NLP
+        # submitted to CasADi.  Keeping this disabled by default is important:
+        # ordinary solves must not build or evaluate an additional CasADi
+        # function.  Interfaces are long-lived during receding-horizon solves,
+        # so the evaluator is cached when the audit is explicitly enabled.
+        self.initial_nlp_audit_enabled = False
+        self.initial_nlp_audits = []
+        self._initial_nlp_constraint_audit_function = None
+
+    def enable_initial_nlp_audit(self, enabled: Bool = True) -> None:
+        """Enable exact pre-solve evaluations of the submitted ``g(x0)``."""
+
+        self.initial_nlp_audit_enabled = enabled
+
     def configure(self, **options):
         """
         Set some options
