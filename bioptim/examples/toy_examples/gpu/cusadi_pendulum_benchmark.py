@@ -170,7 +170,14 @@ def _load_cusadi_codegen(cusadi_root: Path) -> tuple[types.ModuleType, dict[int,
     return generator, supported_operations
 
 
-def _generate_cuda_source(dynamics: casadi.Function, cusadi_root: Path) -> tuple[Path, list[str]]:
+def _generate_cuda_source(
+    dynamics: casadi.Function,
+    cusadi_root: Path,
+    cuda_block_size: int = 256,
+) -> tuple[Path, list[str]]:
+    if cuda_block_size < 32 or cuda_block_size > 1024 or cuda_block_size % 32:
+        raise ValueError("CUDA block size must be a multiple of 32 between 32 and 1024")
+
     generator, supported_operations = _load_cusadi_codegen(cusadi_root)
     used_operation_ids = {dynamics.instruction_id(index) for index in range(dynamics.n_instructions())}
     unsupported = sorted(used_operation_ids - supported_operations.keys())
@@ -196,6 +203,26 @@ def _generate_cuda_source(dynamics: casadi.Function, cusadi_root: Path) -> tuple
         filepath=str(cuda_source),
         benchmarking=False,
         debug_mode=False,
+    )
+    source = cuda_source.read_text(encoding="utf-8")
+    sign_assignment = " = sign("
+    if sign_assignment in source:
+        kernel_declaration = "__global__ void evaluate_kernel ("
+        if source.count(kernel_declaration) != 1:
+            raise RuntimeError("Cannot locate CusADi's CUDA kernel declaration")
+        sign_helper = (
+            "__device__ __forceinline__ double cusadi_sign(double value) {\n"
+            "    return static_cast<double>((value > 0.0) - (value < 0.0));\n"
+            "}\n\n"
+        )
+        source = source.replace(kernel_declaration, sign_helper + kernel_declaration)
+        source = source.replace(sign_assignment, " = cusadi_sign(")
+    default_launch = "int blockSize = 256;"
+    if source.count(default_launch) != 1:
+        raise RuntimeError("Cannot locate CusADi's CUDA block-size declaration in the generated source")
+    cuda_source.write_text(
+        source.replace(default_launch, f"int blockSize = {cuda_block_size};"),
+        encoding="utf-8",
     )
     used_operation_names = sorted(supported_operations[operation_id] for operation_id in used_operation_ids)
     return cuda_source, used_operation_names
@@ -365,6 +392,8 @@ def _time_cusadi_gpu(
 
 def _error_metrics(reference: np.ndarray, candidate: np.ndarray) -> tuple[float, float]:
     absolute_error = np.abs(candidate - reference)
+    if absolute_error.size == 0:
+        return 0.0, 0.0
     relative_error = absolute_error / np.maximum(np.abs(reference), np.finfo(np.float64).eps)
     return float(np.max(absolute_error)), float(np.max(relative_error))
 

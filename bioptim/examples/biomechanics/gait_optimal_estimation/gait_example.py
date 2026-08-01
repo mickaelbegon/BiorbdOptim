@@ -32,7 +32,10 @@ from bioptim import (
     TimeAlignment,
 )
 from bioptim.examples.utils import ExampleUtils
-from model import WithResidualExternalForces, animate_solution
+try:
+    from .model import WithResidualExternalForces, animate_solution
+except ImportError:
+    from model import WithResidualExternalForces, animate_solution
 
 
 def prepare_ocp(

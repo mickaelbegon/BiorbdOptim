@@ -30,6 +30,9 @@ def prepare_ocp(
     n_shooting: int,
     weight: float,
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
+    expand_dynamics: bool = False,
+    n_threads: int = 1,
+    use_sx: bool = False,
 ) -> OptimalControlProgram:
     """
     Prepare the ocp
@@ -47,6 +50,12 @@ def prepare_ocp(
         the model will try to reach the marker. This is in relation with the other objective functions
     ode_solver: OdeSolverBase
         The ode solver to use
+    expand_dynamics: bool
+        If the dynamics function should be expanded.
+    n_threads: int
+        Number of CPU threads used to map the dynamics over the shooting nodes.
+    use_sx: bool
+        If the OCP graph should use CasADi SX instead of MX.
 
     Returns
     -------
@@ -68,6 +77,7 @@ def prepare_ocp(
     # Dynamics
     dynamics = DynamicsOptions(
         ode_solver=ode_solver,
+        expand_dynamics=expand_dynamics,
     )
 
     # Path constraint
@@ -104,6 +114,8 @@ def prepare_ocp(
         x_bounds=x_bounds,
         u_bounds=u_bounds,
         objective_functions=objective_functions,
+        n_threads=n_threads,
+        use_sx=use_sx,
     )
 
 

@@ -1,4 +1,4 @@
-# CusADi pendulum benchmark
+# CusADi GPU benchmarks
 
 This experimental benchmark evaluates whether
 [CusADi](https://github.com/se-hwan/cusadi) can accelerate a real CasADi
@@ -18,6 +18,234 @@ CusADi evaluates many independent instances of a CasADi function in parallel.
 This benchmark therefore measures a useful building block for batched
 simulation, parameter sweeps, MHE, or parallel OCPs. It does **not** move IPOPT
 or a complete bioptim solve to the GPU.
+
+## Multi-OCP CPU/GPU benchmark
+
+`cusadi_multi_dynamics_benchmark.py` extends the experiment to six complete
+OCPs and one additional dynamics-only stress case:
+
+- a torque-driven pendulum;
+- a torque-driven rigid cube;
+- a joint-acceleration-driven double pendulum;
+- a rigid-contact model with friction inequalities;
+- an arm driven by residual torques and six muscles;
+- an arm combining residual torques, six muscles, and rigid contact;
+- a 34-degree-of-freedom gait model with 20 muscles and measured external
+  forces (dynamics only).
+
+The pendulum, cube, contact, and muscle cases are adapted from the solver
+matrix on the experimental `codex/madnlp-linear-solvers` branch. The benchmark
+keeps two measurements separate:
+
+1. complete OCP solves with IPOPT on the CPU, in fresh processes, while varying
+   Bioptim/CasADi threads and the OpenMP, OpenBLAS, MKL, NumExpr, and Accelerate
+   thread limits;
+2. batched evaluations of the dynamics extracted from those same OCPs, using
+   threaded CasADi maps on the CPU and CusADi on the GPU.
+
+The complete reference gait OCP uses 105 shooting intervals and documents a
+memory requirement of about 20 GB. Even a two-interval IPOPT trial took more
+than 90 seconds on the benchmark machine. It is therefore included only as a
+GPU dynamics stress case: its 47,751-instruction dynamics graph is about 13
+times larger than the static muscle-arm graph. All other cases are solved as
+complete OCPs on the CPU.
+
+CusADi does not provide an NLP solver. There are therefore two realistic ways
+to use it in an OCP workflow:
+
+1. keep a host-side optimizer and replace its numerical callbacks by CusADi
+   kernels;
+2. use matrix-free JVP/VJP/HVP kernels in a hybrid SQP method whose sparse KKT
+   solve remains on the CPU.
+
+The repository now benchmarks both steps. The end-to-end case is deliberately
+described as a hybrid solve: the sparse KKT factorization remains on the CPU.
+
+## Hybrid end-to-end OCP solve
+
+`cusadi_hybrid_ocp_benchmark.py` passes the complete discretized NLP to CasADi
+`nlpsol` and IPOPT. IPOPT and its sparse KKT solves run on the CPU, while the
+following interchangeable numerical-oracle implementations are compared:
+
+- CasADi on the CPU;
+- CusADi on the GPU, including host/device transfers.
+
+Both backends provide the same full-OCP objective `f(z)`, constraints `g(z)`,
+objective gradient, sparse constraint Jacobian, and upper-triangular sparse
+Hessian of the Lagrangian. CasADi's `grad_f`, `jac_g`, and `hess_lag` hooks
+connect these callbacks directly to IPOPT. The results include convergence,
+iterations, callback counts, final constraint violation, time spent inside the
+numerical oracles, total solve time, and one-time CUDA compilation time. This
+is a real IPOPT OCP solve through CusADi rather than an isolated dynamics
+timing.
+
+Run the pendulum comparison with:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_hybrid_ocp_benchmark.py \
+    --cases pendulum \
+    --n-shooting 10 \
+    --cusadi-root "$CUSADI_ROOT" \
+    --output /tmp/cusadi_hybrid_ocp.json
+```
+
+Use `--skip-gpu` for a CPU-only validation of the callback route. The script
+accepts the other benchmark cases and preserves their CasADi sparsity. One OCP
+evaluation nevertheless corresponds to a CusADi batch of one, so transfer and
+kernel-launch overhead can dominate even though the KKT solve remains sparse.
+
+Exact Hessians are used by default. Add `--hessian-approximation
+limited-memory` to let IPOPT use L-BFGS and avoid compiling the Hessian kernel.
+The benchmark reuses an existing CUDA library when the newly generated source
+is byte-for-byte identical; use `--rebuild` to force recompilation.
+
+On the reference RTX 3060, the 10-interval pendulum with limited-memory IPOPT
+converged in 36 iterations on both backends. The cached CPU and GPU solves took
+about 0.127 s and 0.324 s, respectively, including transfers. The 10-interval
+cube with an exact Hessian converged in 12 iterations on both backends and took
+about 0.048 s on CPU versus 0.055 s with GPU callbacks. The solutions agreed to
+approximately `5e-9` and `2e-15`, respectively. At batch size one, the GPU is
+therefore correct but not faster for these small OCPs.
+
+A larger exact-Hessian cube run used 100 shooting intervals, 907 decision
+variables, 600 constraints, 2,700 sparse Jacobian nonzeros, and 904 upper
+Hessian nonzeros. CPU and GPU callbacks both converged in 19 IPOPT iterations
+to the same cost, with a maximum constraint violation of `3.6e-15` and a
+maximum decision-vector difference of `1.1e-13`. The CPU and hybrid GPU solve
+times were 0.125 s and 0.176 s. Generating and compiling the four CUDA oracles
+for the first run took 275 s, so source/library caching is essential.
+
+The same monolithic code-generation strategy does not scale uniformly with
+dynamics complexity. At 100 intervals, the contact-with-friction OCP has 909
+decision variables and 1,200 constraints, but its sparse full-NLP Jacobian
+already contains about 38.8 million CasADi instructions. Merely constructing
+that symbolic Jacobian used about 4.1 GB of resident memory on the reference
+machine. This motivates generating reusable per-node defect/derivative blocks,
+or matrix-free products, for complex models instead of one giant CUDA source.
+
+The node-local route remains useful for those larger models. With OCPs built
+at 100 intervals and a batch of 100 independent dynamics evaluations, the
+contact-with-friction case took 0.298 ms with a four-thread CasADi map versus
+0.204 ms through CusADi including transfers (1.46x). The six-muscle arm with
+rigid contact took 0.951 ms versus 0.325 ms (2.93x). Maximum absolute CPU/GPU
+errors were `1.4e-12` and `2.5e-11`, respectively. These timings concern the
+continuous dynamics blocks, not complete IPOPT iterations.
+
+CUDA does not expose a portable way to reserve an arbitrary number of GPU
+cores for one process. The benchmark varies the useful launch controls instead:
+the number of independent CUDA threads (the batch size) and the number of
+threads per block. It also records the GPU streaming-multiprocessor count.
+
+Run the complete default matrix with:
+
+```bash
+conda activate bioptim_cusadi
+export CUSADI_ROOT="$CONDA_PREFIX/cusadi-src"
+git submodule update --init external/biomechanics_models
+
+python bioptim/examples/toy_examples/gpu/cusadi_multi_dynamics_benchmark.py \
+    --cpu-cores 4,8,16,32 \
+    --gpu-batch-sizes 256,2048,16384 \
+    --gpu-block-sizes 64,128,256 \
+    --output cusadi_multi_dynamics_results.json
+```
+
+For a quick end-to-end check:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_multi_dynamics_benchmark.py \
+    --cases pendulum contact_inequality static_arm \
+    --cpu-cores 4 \
+    --gpu-batch-sizes 32,256 \
+    --gpu-block-sizes 128 \
+    --n-shooting 3 \
+    --solve-repetitions 1 \
+    --eval-warmup 1 \
+    --eval-repeats 3 \
+    --max-iterations 20 \
+    --output /tmp/cusadi_multi_smoke.json
+```
+
+Use `--skip-ocp-solves` to measure only the CPU/GPU dynamics matrix or
+`--skip-gpu` to run the CPU solve matrix on a machine without CUDA.
+Add `--gpu-derivatives` to benchmark, in addition to the dynamics
+`f(x, u)`, the sparse local derivatives
+
+- `J = d(f) / d(x, u)`;
+- `H = d2(lambda^T f) / d(x, u)2`, where `lambda` is a vector with one
+  adjoint weight per dynamics output.
+
+For example:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_multi_dynamics_benchmark.py \
+    --cases pendulum contact_inequality static_arm muscle_contact \
+    --cpu-cores 4,8,16,32 \
+    --gpu-batch-sizes 32 \
+    --gpu-block-sizes 64,128,256 \
+    --gpu-derivatives \
+    --derivative-batch-sizes 32,256,2048 \
+    --skip-ocp-solves \
+    --output /tmp/cusadi_derivatives.json
+```
+
+The derivative outputs are checked numerically against CasADi on the CPU.
+These are derivatives of one continuous dynamics evaluation only. They do not
+yet include the integration scheme, multiple-shooting defects, path and
+boundary constraints, objective terms, the assembled NLP Jacobian/Hessian, or
+the sparse linear/KKT solve performed at each NLP iteration.
+
+The full whole-body dynamics Jacobian and weighted Hessian currently generate
+2,835,505 and 3,474,646 CasADi instructions and CUDA sources of about 224 MB
+and 275 MB. On the reference machine, NVCC did not finish compiling the
+Jacobian after 10 minutes and used about 15.5 GB of RAM. This case is therefore
+excluded from `--gpu-derivatives`; directional products (JVP/VJP/HVP) or
+smaller derivative blocks are the practical next step.
+
+Add `--gpu-nlp-oracles` to benchmark the complete discretized OCP rather than
+only its continuous dynamics. The available functions are:
+
+- `primal`: objective and all defects/path/boundary constraints;
+- `gradient`: objective gradient;
+- `jvp`: constraint Jacobian times a search direction;
+- `vjp`: constraint adjoint times the constraint Jacobian;
+- `hvp`: Lagrangian Hessian times a search direction.
+
+The inputs are bounded candidate points along a search line, which is closer
+to an SQP iteration than unrelated random dynamics states. Batch sizes
+`1,8,32,256` distinguish a single sequential OCP, speculative parallel line
+search, and multiple OCP/multi-start workloads. For example:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_multi_dynamics_benchmark.py \
+    --cases pendulum contact_inequality static_arm \
+    --cpu-cores 4,8 \
+    --gpu-batch-sizes 32 \
+    --gpu-block-sizes 128,256 \
+    --gpu-nlp-oracles \
+    --nlp-batch-sizes 1,8,32,256 \
+    --skip-ocp-solves \
+    --output /tmp/cusadi_nlp_oracles.json
+```
+
+These products avoid explicitly materializing dense second-order matrices,
+but they do not by themselves implement globalization, preconditioning, or the
+KKT solve. Those components are the remaining work for a scalable hybrid SQP
+backend.
+
+Use `--include-dynamics-only-ocp-solves` together with a small
+`--max-iterations` value to compare fixed IPOPT iteration budgets for the
+whole-body gait stress case without implying convergence, for example:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_multi_dynamics_benchmark.py \
+    --cases wholebody_gait \
+    --cpu-cores 4,8,16,32 \
+    --include-dynamics-only-ocp-solves \
+    --max-iterations 10 \
+    --skip-gpu \
+    --output /tmp/cusadi_wholebody_10_iterations.json
+```
 
 ## Requirements
 
