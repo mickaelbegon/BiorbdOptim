@@ -131,6 +131,71 @@ rigid contact took 0.951 ms versus 0.325 ms (2.93x). Maximum absolute CPU/GPU
 errors were `1.4e-12` and `2.5e-11`, respectively. These timings concern the
 continuous dynamics blocks, not complete IPOPT iterations.
 
+## Shooting-block sparse Jacobian
+
+`cusadi_shooting_jacobian_benchmark.py` preserves the multiple-shooting
+structure instead of expanding the complete NLP Jacobian. Bioptim already
+groups constraints by node. The benchmark therefore extracts one homogeneous
+constraint block, identifies its local decision variables, and generates a
+directional-derivative kernel. Unit seed directions turn the kernel batch into
+the exact local Jacobians, whose sparse values are assembled into the global
+row/column structure on the CPU. The OCP uses
+`OrderingStrategy.TIME_MAJOR`, so the global decision vector follows the DMS
+node order and the assembled Jacobian exposes its block-banded structure.
+
+For the contact-with-friction OCP at 100 intervals, each block has 12
+constraints, 18 local variables, and 124 Jacobian nonzeros. The complete
+Jacobian contains 12,400 nonzeros, but the GPU only needs one 66,513-instruction
+JVP graph evaluated for `100 * 18 = 1,800` node/direction pairs. On the RTX
+3060, a four-thread CasADi map took about 124 ms. CusADi took 11.7 ms including
+transfers, and host sparse assembly took 0.3 ms, for an end-to-end speedup of
+about 10.4x. The assembled product was checked against a global CasADi JVP;
+the maximum CPU/GPU absolute error was below `4e-10`.
+
+Cold and warm timings were measured in fresh processes with the same graph and
+GPU configuration. The cold run used `--rebuild`; the warm run regenerated the
+source for comparison and reused the byte-identical library.
+
+| Stage | Cold | Warm cache |
+|---|---:|---:|
+| OCP and shooting-block construction | 3.220 s | 3.084 s |
+| CUDA source generation | 0.211 s | 0.214 s |
+| CUDA compilation | 105.005 s | 0.002 s |
+| CUDA library load | 0.119 s | 0.115 s |
+| Total GPU preparation | 106.372 s | 1.374 s |
+| One CPU Jacobian, four threads | 125.188 ms | 128.738 ms |
+| One GPU Jacobian, transfers and assembly | 11.845 ms | 11.775 ms |
+| Process start to first assembled Jacobian | 109.604 s | 4.470 s |
+
+The warm-process setup still includes OCP construction, source verification,
+PyTorch/CUDA initialization, and library loading. Once initialized, the
+steady-state cost relevant to an NLP iteration is about 11.8 ms per assembled
+Jacobian.
+
+With time-major ordering, column zero (the fixed phase duration) is the only
+decision column shared by every block. All other columns of a shooting block
+are contiguous: `[1, 17]` for the first interval and `[892, 908]` for the last
+one. This is the expected block-banded DMS layout; the shared duration column
+can be treated separately if a strictly banded KKT representation is needed.
+
+Run this benchmark with:
+
+```bash
+python bioptim/examples/toy_examples/gpu/cusadi_shooting_jacobian_benchmark.py \
+    --case contact_inequality \
+    --n-shooting 100 \
+    --cpu-cores 4 \
+    --gpu-block-size 256 \
+    --cusadi-root "$CUSADI_ROOT" \
+    --output /tmp/cusadi_shooting_jacobian_contact_100.json
+```
+
+The generated CUDA library is reused when its source is unchanged; pass
+`--rebuild` to force compilation. The current prototype requires a
+single-phase OCP with homogeneous node blocks and no extra phase-level
+constraints. Supporting heterogeneous blocks requires one kernel per block
+signature plus a small CPU-only remainder.
+
 CUDA does not expose a portable way to reserve an arbitrary number of GPU
 cores for one process. The benchmark varies the useful launch controls instead:
 the number of independent CUDA threads (the batch size) and the number of

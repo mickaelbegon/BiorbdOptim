@@ -32,7 +32,7 @@ import casadi
 import numpy as np
 
 import bioptim
-from bioptim import ObjectiveFcn, ObjectiveList, OdeSolver, Solver
+from bioptim import ObjectiveFcn, ObjectiveList, OdeSolver, OrderingStrategy, Solver
 from bioptim.examples.biomechanics.gait_optimal_estimation.gait_example import (
     prepare_ocp as prepare_wholebody_gait,
 )
@@ -235,7 +235,12 @@ def _models_directory() -> Path:
     return Path(ExampleUtils.folder) / "models"
 
 
-def _prepare_case(case: str, n_shooting: int, cpu_cores: int):
+def _prepare_case(
+    case: str,
+    n_shooting: int,
+    cpu_cores: int,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
+):
     models = _models_directory()
     if case == "pendulum":
         return prepare_pendulum(
@@ -245,6 +250,7 @@ def _prepare_case(case: str, n_shooting: int, cpu_cores: int):
             use_sx=True,
             n_threads=cpu_cores,
             expand_dynamics=True,
+            ordering_strategy=ordering_strategy,
         )
     if case == "cube":
         ocp = prepare_cube(
@@ -254,6 +260,7 @@ def _prepare_case(case: str, n_shooting: int, cpu_cores: int):
             use_sx=True,
             expand_dynamics=True,
             n_threads=cpu_cores,
+            ordering_strategy=ordering_strategy,
         )
         objectives = ObjectiveList()
         objectives.add(
@@ -300,6 +307,7 @@ def _prepare_case(case: str, n_shooting: int, cpu_cores: int):
             expand_dynamics=True,
             n_threads=cpu_cores,
             use_sx=True,
+            ordering_strategy=ordering_strategy,
         )
     if case == "static_arm":
         return prepare_static_arm(
@@ -320,6 +328,7 @@ def _prepare_case(case: str, n_shooting: int, cpu_cores: int):
             expand_dynamics=True,
             n_threads=cpu_cores,
             use_sx=True,
+            ordering_strategy=ordering_strategy,
         )
     if case == "wholebody_gait":
         data_path = (

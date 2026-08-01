@@ -13,6 +13,7 @@ from bioptim import (
     ObjectiveList,
     BoundsList,
     OdeSolver,
+    OrderingStrategy,
     Solver,
 )
 from bioptim.examples.utils import ExampleUtils
@@ -27,6 +28,7 @@ def prepare_ocp(
     use_sx=True,
     expand_dynamics=True,
     n_threads=1,
+    ordering_strategy=OrderingStrategy.VARIABLE_MAJOR,
 ):
     # BioModel path
     bio_model = TorqueBiorbdModel(biorbd_model_path)
@@ -53,6 +55,7 @@ def prepare_ocp(
         u_bounds=u_bounds,
         use_sx=use_sx,
         n_threads=n_threads,
+        ordering_strategy=ordering_strategy,
     )
 
 

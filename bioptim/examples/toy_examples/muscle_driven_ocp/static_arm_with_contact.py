@@ -20,6 +20,7 @@ from bioptim import (
     Solver,
     ContactType,
     OnlineOptim,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 
@@ -33,6 +34,7 @@ def prepare_ocp(
     expand_dynamics: bool = False,
     n_threads: int = 1,
     use_sx: bool = False,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> OptimalControlProgram:
     """
     Prepare the ocp
@@ -56,6 +58,8 @@ def prepare_ocp(
         Number of CPU threads used to map the dynamics over the shooting nodes.
     use_sx: bool
         If the OCP graph should use CasADi SX instead of MX.
+    ordering_strategy: OrderingStrategy
+        How states and controls are ordered in the global decision vector.
 
     Returns
     -------
@@ -116,6 +120,7 @@ def prepare_ocp(
         objective_functions=objective_functions,
         n_threads=n_threads,
         use_sx=use_sx,
+        ordering_strategy=ordering_strategy,
     )
 
 
