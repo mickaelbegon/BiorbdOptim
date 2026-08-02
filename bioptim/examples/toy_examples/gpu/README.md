@@ -172,6 +172,76 @@ PyTorch/CUDA initialization, and library loading. Once initialized, the
 steady-state cost relevant to an NLP iteration is about 11.8 ms per assembled
 Jacobian.
 
+### Complete OCP timings
+
+With `--solve-ocp`, the assembled Jacobian is exposed through CasADi's
+`jac_g` callback and used by IPOPT. The CPU and GPU variants use the same
+time-major NLP, block decomposition, IPOPT options, limited-memory Hessian,
+MUMPS KKT solve on the CPU, initial guess, and tolerances. Only the JVP backend
+changes. Both variants converged in 45 iterations to cost
+`0.154507977881759`, with constraint violation `4.82e-7`; their decision
+vectors differed by at most `3.70e-12`.
+
+| Complete OCP measurement | Cold CPU | Cold GPU | Warm CPU | Warm GPU |
+|---|---:|---:|---:|---:|
+| Solver construction | 4.074 s | 3.892 s | 3.871 s | 3.881 s |
+| IPOPT solve | 9.560 s | 2.014 s | 9.108 s | 1.924 s |
+| Time inside `jac_g` | 8.084 s | 0.620 s | 7.702 s | 0.615 s |
+| Solver construction and solve | 13.635 s | 5.906 s | 12.979 s | 5.804 s |
+| Total including OCP build and GPU preparation | 16.566 s | 112.531 s | 15.926 s | 10.101 s |
+
+The GPU solve itself is 4.75x faster cold and 4.73x faster warm. Including
+solver construction gives 2.31x and 2.24x. The first cold GPU OCP is 6.79x
+slower end to end because of CUDA compilation, whereas the cached warm OCP is
+1.58x faster end to end. At the observed solve times, approximately 15 solves
+of the same compiled graph are needed to amortize the one-time compilation.
+
+The same complete-OCP comparison was also run at 100 intervals on six
+different dynamics. `Solver total` includes construction of the CasADi/IPOPT
+solver and the IPOPT solve. `Warm end to end` additionally includes OCP/block
+construction and cached GPU preparation (source verification, CUDA/PyTorch
+initialization, and library loading). A gain above one favors the GPU.
+
+| Case | Variables / constraints | Iterations CPU / GPU | IPOPT solve CPU / GPU | Solve gain | Solver total CPU / GPU | Solver-total gain | Warm end to end CPU / GPU | Warm gain |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Pendulum | 605 / 400 | 216 / 208 | 3.245 / 1.375 s | 2.36x | 3.510 / 1.684 s | 2.09x | 4.150 / 3.477 s | 1.19x |
+| Cube | 907 / 600 | 166 / 166 | 3.352 / 1.892 s | 1.77x | 3.404 / 1.943 s | 1.75x | 3.866 / 3.593 s | 1.08x |
+| Joint acceleration | 505 / 400 | 34 / 34 | 0.424 / 0.256 s | 1.66x | 0.656 / 0.517 s | 1.27x | 1.297 / 2.314 s | 0.56x |
+| Contact with friction | 909 / 1,200 | 45 / 45 | 9.108 / 1.924 s | 4.73x | 12.979 / 5.804 s | 2.24x | 15.926 / 10.101 s | 1.58x |
+| Static arm | 1,205 / 400 | 65 / 65 | 29.512 / 7.151 s | 4.13x | 43.795 / 20.380 s | 2.15x | 51.839 / 30.086 s | 1.72x |
+| Muscle-driven arm with contact | 1,507 / 600 | 444 / 427 | 267.064 / 63.728 s | 4.19x | 281.508 / 77.150 s | 3.65x | 289.430 / 86.661 s | 3.34x |
+
+Cold end-to-end timings include forced NVCC compilation. Compilation is cheap
+for the toy graphs but takes several minutes for the generated biomechanical
+graphs, so every first solve is slower on the GPU in the current prototype.
+
+| Case | NVCC compilation | Cold end to end CPU / GPU | Cold gain |
+|---|---:|---:|---:|
+| Pendulum | 2.970 s | 4.002 / 6.413 s | 0.62x |
+| Cube | 1.215 s | 3.773 / 4.770 s | 0.79x |
+| Joint acceleration | 4.269 s | 1.336 / 6.613 s | 0.20x |
+| Contact with friction | 102.343 s | 16.566 / 112.531 s | 0.15x |
+| Static arm | 314.459 s | 53.431 / 346.341 s | 0.15x |
+| Muscle-driven arm with contact | 349.213 s | 288.507 / 435.461 s | 0.66x |
+
+All twelve solves reported `Solve_Succeeded`. Cube, joint acceleration,
+contact, and static-arm CPU/GPU decision vectors agree within `3.7e-12`.
+The pendulum differs by `1.2e-4` after taking 216 versus 208 iterations, while
+costs differ by `2.7e-8`. The non-convex muscle/contact problem takes 444
+versus 427 iterations and differs by `0.123` in one decision component, but
+costs differ by only `4.2e-7` and both maximum constraint violations remain
+below `9e-9`. CusADi currently compiles with NVCC `--use_fast_math`; the latter
+two results should therefore be treated as numerically equivalent feasible
+solutions, not bitwise-identical trajectories.
+
+The matrix shows where the hybrid split pays off: after caching, expensive
+dynamics make the complete OCP 1.58x to 3.34x faster end to end. For the short
+joint-acceleration solve, the approximately one-second GPU initialization cost
+is larger than the saved solve time, despite a 1.66x faster IPOPT solve. The
+whole-body gait example is intentionally not included at 100 intervals: its
+documented construction footprint is about 20 GB, so it is a memory stress
+case rather than a representative benchmark on this machine.
+
 With time-major ordering, column zero (the fixed phase duration) is the only
 decision column shared by every block. All other columns of a shooting block
 are contiguous: `[1, 17]` for the first interval and `[892, 908]` for the last
@@ -186,6 +256,7 @@ python bioptim/examples/toy_examples/gpu/cusadi_shooting_jacobian_benchmark.py \
     --n-shooting 100 \
     --cpu-cores 4 \
     --gpu-block-size 256 \
+    --solve-ocp \
     --cusadi-root "$CUSADI_ROOT" \
     --output /tmp/cusadi_shooting_jacobian_contact_100.json
 ```

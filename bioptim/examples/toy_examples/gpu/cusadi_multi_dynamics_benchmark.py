@@ -294,6 +294,7 @@ def _prepare_case(
             n_shooting=n_shooting,
             use_sx=True,
             n_threads=cpu_cores,
+            ordering_strategy=ordering_strategy,
         )
     if case == "contact_inequality":
         return prepare_contact_inequality(
@@ -317,6 +318,7 @@ def _prepare_case(
             use_sx=True,
             n_threads=cpu_cores,
             expand_dynamics=True,
+            ordering_strategy=ordering_strategy,
         )
     if case == "muscle_contact":
         return prepare_muscle_contact(

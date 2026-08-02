@@ -45,7 +45,14 @@ from bioptim.examples.toy_examples.gpu.cusadi_pendulum_benchmark import (
 )
 
 
-SUPPORTED_CASES = ("cube", "contact_inequality", "muscle_contact")
+SUPPORTED_CASES = (
+    "pendulum",
+    "cube",
+    "joint_acceleration",
+    "contact_inequality",
+    "static_arm",
+    "muscle_contact",
+)
 
 
 def _positive_int(value: str) -> int:
@@ -294,6 +301,254 @@ def _validate_partition_and_jacobian(
     }
 
 
+class _ShootingJacobianBackend:
+    """Evaluate and assemble one full sparse Jacobian on CPU or GPU."""
+
+    def __init__(
+        self,
+        jvp: casadi.Function,
+        dependency_columns: list[np.ndarray],
+        local_sparsity: casadi.Sparsity,
+        constraint_size: int,
+        decision_size: int,
+        cpu_cores: int,
+        torch: Any | None = None,
+        gpu_function: Any | None = None,
+    ):
+        self.jvp = jvp
+        self.dependency_columns = dependency_columns
+        self.local_sparsity = local_sparsity
+        self.constraint_size = constraint_size
+        self.local_size = dependency_columns[0].size
+        self.batch_size = len(dependency_columns) * self.local_size
+        self.torch = torch
+        self.gpu_function = gpu_function
+        self.mapped_jvp = (
+            None
+            if gpu_function is not None
+            else jvp.map(
+                self.batch_size,
+                "serial" if cpu_cores == 1 else "thread",
+                cpu_cores,
+            )
+        )
+
+        empty_blocks = np.zeros(
+            (len(dependency_columns), constraint_size, self.local_size),
+            dtype=np.float64,
+        )
+        rows, columns, _ = _assemble_sparse_jacobian(
+            empty_blocks, dependency_columns, local_sparsity
+        )
+        self.csc_order = np.lexsort((rows, columns))
+        sorted_rows = rows[self.csc_order]
+        sorted_columns = columns[self.csc_order]
+        self.sparsity = casadi.Sparsity.triplet(
+            len(dependency_columns) * constraint_size,
+            decision_size,
+            sorted_rows.tolist(),
+            sorted_columns.tolist(),
+        )
+        sparsity_rows, sparsity_columns = self.sparsity.get_triplet()
+        if not np.array_equal(sparsity_rows, sorted_rows) or not np.array_equal(
+            sparsity_columns, sorted_columns
+        ):
+            raise RuntimeError("CasADi reordered the assembled CSC sparsity unexpectedly")
+        self.calls = 0
+        self.wall_s = 0.0
+
+    def reset_statistics(self) -> None:
+        self.calls = 0
+        self.wall_s = 0.0
+
+    def evaluate(self, decision: np.ndarray) -> np.ndarray:
+        start = time.perf_counter()
+        inputs = _batched_jvp_inputs(decision, self.dependency_columns)
+        if self.gpu_function is None:
+            output = self.mapped_jvp.call(
+                [casadi.DM(values.T) for values in inputs]
+            )[0]
+            jvp_values = np.asarray(output.nonzeros(), dtype=np.float64).reshape(
+                self.batch_size, self.jvp.nnz_out(0)
+            )
+        else:
+            gpu_inputs = [
+                self.torch.from_numpy(values)
+                .to(device="cuda", dtype=self.torch.float64)
+                .contiguous()
+                for values in inputs
+            ]
+            self.gpu_function.evaluate(gpu_inputs)
+            self.torch.cuda.synchronize()
+            jvp_values = (
+                self.gpu_function.outputs_sparse[0].detach().cpu().numpy()
+            )
+
+        dense_blocks = _dense_local_jacobians(
+            jvp_values,
+            len(self.dependency_columns),
+            self.local_size,
+            self.constraint_size,
+        )
+        _, _, values = _assemble_sparse_jacobian(
+            dense_blocks, self.dependency_columns, self.local_sparsity
+        )
+        self.calls += 1
+        self.wall_s += time.perf_counter() - start
+        return values[self.csc_order]
+
+
+class _ShootingJacobianCallback(casadi.Callback):
+    """Expose the assembled block Jacobian through CasADi's ``jac_g`` ABI."""
+
+    def __init__(
+        self,
+        name: str,
+        decision_size: int,
+        constraint_function: casadi.Function,
+        backend: _ShootingJacobianBackend,
+    ):
+        casadi.Callback.__init__(self)
+        self.decision_size = decision_size
+        self.constraint_function = constraint_function
+        self.backend = backend
+        self.construct(name, {})
+
+    def get_n_in(self) -> int:
+        return 2
+
+    def get_n_out(self) -> int:
+        return 2
+
+    def get_name_in(self, index: int) -> str:
+        return ("x", "p")[index]
+
+    def get_name_out(self, index: int) -> str:
+        return ("g", "jac_g_x")[index]
+
+    def get_sparsity_in(self, index: int) -> casadi.Sparsity:
+        return (
+            casadi.Sparsity.dense(self.decision_size, 1)
+            if index == 0
+            else casadi.Sparsity.dense(0, 1)
+        )
+
+    def get_sparsity_out(self, index: int) -> casadi.Sparsity:
+        return (
+            self.constraint_function.sparsity_out(0)
+            if index == 0
+            else self.backend.sparsity
+        )
+
+    def eval(self, arguments: list[casadi.DM]) -> list[casadi.DM]:
+        decision = np.asarray(arguments[0], dtype=np.float64).reshape(-1)
+        constraints = self.constraint_function(arguments[0])
+        jacobian_values = self.backend.evaluate(decision)
+        return [
+            constraints,
+            casadi.DM(self.backend.sparsity, jacobian_values),
+        ]
+
+
+def _maximum_constraint_violation(
+    values: np.ndarray, lower: np.ndarray, upper: np.ndarray
+) -> float:
+    return float(
+        np.max(
+            np.maximum(
+                np.maximum(lower - values, 0.0),
+                np.maximum(values - upper, 0.0),
+            )
+        )
+    )
+
+
+def _solve_with_block_jacobian(
+    label: str,
+    ocp: Any,
+    decision_vector: casadi.SX | casadi.MX,
+    objective: casadi.SX | casadi.MX,
+    constraints: casadi.SX | casadi.MX,
+    constraint_bounds: Any,
+    backend: _ShootingJacobianBackend,
+    tolerance: float,
+    max_iterations: int,
+) -> tuple[dict[str, Any], np.ndarray]:
+    constraint_function = casadi.Function(
+        f"{label}_block_constraints", [decision_vector], [constraints]
+    )
+    jacobian_callback = _ShootingJacobianCallback(
+        f"{label}_block_jac_g",
+        int(decision_vector.shape[0]),
+        constraint_function,
+        backend,
+    )
+    options = {
+        "jac_g": jacobian_callback,
+        "ipopt.print_level": 0,
+        "ipopt.tol": tolerance,
+        "ipopt.constr_viol_tol": tolerance,
+        "ipopt.max_iter": max_iterations,
+        "ipopt.linear_solver": "mumps",
+        "ipopt.hessian_approximation": "limited-memory",
+        "print_time": False,
+        "error_on_fail": False,
+    }
+    solver_start = time.perf_counter()
+    solver = casadi.nlpsol(
+        f"{label}_block_solver",
+        "ipopt",
+        {"x": decision_vector, "f": objective, "g": constraints},
+        options,
+    )
+    solver_setup_s = time.perf_counter() - solver_start
+
+    initial = np.asarray(ocp.init_vector, dtype=np.float64).reshape(-1)
+    variable_lower = np.asarray(
+        ocp.bounds_vectors[0], dtype=np.float64
+    ).reshape(-1)
+    variable_upper = np.asarray(
+        ocp.bounds_vectors[1], dtype=np.float64
+    ).reshape(-1)
+    constraint_lower = np.asarray(
+        constraint_bounds.min, dtype=np.float64
+    ).reshape(-1)
+    constraint_upper = np.asarray(
+        constraint_bounds.max, dtype=np.float64
+    ).reshape(-1)
+
+    backend.reset_statistics()
+    solve_start = time.perf_counter()
+    solution = solver(
+        x0=initial,
+        lbx=variable_lower,
+        ubx=variable_upper,
+        lbg=constraint_lower,
+        ubg=constraint_upper,
+    )
+    solve_s = time.perf_counter() - solve_start
+    statistics = solver.stats()
+    decision = np.asarray(solution["x"], dtype=np.float64).reshape(-1)
+    constraint_values = np.asarray(solution["g"], dtype=np.float64).reshape(-1)
+    violation = _maximum_constraint_violation(
+        constraint_values, constraint_lower, constraint_upper
+    )
+    result = {
+        "backend": label,
+        "success": bool(statistics["success"]),
+        "return_status": str(statistics["return_status"]),
+        "iterations": int(statistics["iter_count"]),
+        "cost": float(solution["f"]),
+        "max_constraint_violation": violation,
+        "solver_setup_s": solver_setup_s,
+        "solve_s": solve_s,
+        "solver_setup_and_solve_s": solver_setup_s + solve_s,
+        "jacobian_calls": backend.calls,
+        "jacobian_wall_s": backend.wall_s,
+    }
+    return result, decision
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", choices=SUPPORTED_CASES, default="contact_inequality")
@@ -305,6 +560,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--rtol", type=float, default=1e-9)
     parser.add_argument("--atol", type=float, default=1e-9)
+    parser.add_argument(
+        "--solve-ocp",
+        action="store_true",
+        help="Solve the complete OCP with CPU and GPU shooting-block jac_g callbacks",
+    )
+    parser.add_argument("--tolerance", type=float, default=1e-6)
+    parser.add_argument("--max-iterations", type=_positive_int, default=500)
     parser.add_argument(
         "--rebuild", action="store_true", help="Force recompilation of an unchanged CUDA source"
     )
@@ -324,7 +586,7 @@ def main() -> None:
         cpu_cores=1,
         ordering_strategy=OrderingStrategy.TIME_MAJOR,
     )
-    decision_vector, _, _, _ = _nlp_expressions(ocp)
+    decision_vector, objective, _, constraint_bounds = _nlp_expressions(ocp)
     constraints, blocks = _node_constraint_expressions(ocp)
     build_ocp_s = time.perf_counter() - start
 
@@ -477,6 +739,80 @@ def main() -> None:
         for block_columns in nonshared_columns
     )
 
+    ocp_solves: list[dict[str, Any]] = []
+    solve_comparison: dict[str, float] = {}
+    if args.solve_ocp:
+        cpu_backend = _ShootingJacobianBackend(
+            jvp,
+            dependency_columns,
+            local_sparsity,
+            int(blocks[0].shape[0]),
+            int(decision_vector.shape[0]),
+            args.cpu_cores,
+        )
+        gpu_backend = _ShootingJacobianBackend(
+            jvp,
+            dependency_columns,
+            local_sparsity,
+            int(blocks[0].shape[0]),
+            int(decision_vector.shape[0]),
+            args.cpu_cores,
+            torch=torch,
+            gpu_function=gpu_function,
+        )
+        cpu_solve, cpu_decision = _solve_with_block_jacobian(
+            "CasadiCpuBlocks",
+            ocp,
+            decision_vector,
+            objective,
+            constraints,
+            constraint_bounds,
+            cpu_backend,
+            args.tolerance,
+            args.max_iterations,
+        )
+        gpu_solve, gpu_decision = _solve_with_block_jacobian(
+            "CusadiGpuBlocks",
+            ocp,
+            decision_vector,
+            objective,
+            constraints,
+            constraint_bounds,
+            gpu_backend,
+            args.tolerance,
+            args.max_iterations,
+        )
+        cpu_solve["total_including_ocp_build_s"] = (
+            build_ocp_s + cpu_solve["solver_setup_and_solve_s"]
+        )
+        gpu_solve["total_including_ocp_build_and_gpu_preparation_s"] = (
+            build_ocp_s
+            + gpu_preparation_s
+            + gpu_solve["solver_setup_and_solve_s"]
+        )
+        ocp_solves.extend((cpu_solve, gpu_solve))
+        solve_comparison = {
+            "max_cpu_gpu_decision_difference": float(
+                np.max(np.abs(cpu_decision - gpu_decision))
+            ),
+            "solve_speedup": cpu_solve["solve_s"] / gpu_solve["solve_s"],
+            "solver_setup_and_solve_speedup": (
+                cpu_solve["solver_setup_and_solve_s"]
+                / gpu_solve["solver_setup_and_solve_s"]
+            ),
+            "total_speedup_including_build_and_gpu_preparation": (
+                cpu_solve["total_including_ocp_build_s"]
+                / gpu_solve[
+                    "total_including_ocp_build_and_gpu_preparation_s"
+                ]
+            ),
+        }
+        print(
+            f"Complete OCP: CPU {cpu_solve['solve_s']:.3f} s, "
+            f"GPU {gpu_solve['solve_s']:.3f} s, "
+            f"speedup {solve_comparison['solve_speedup']:.2f}x"
+        )
+
     result = {
         "metadata": {
             "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -501,6 +837,9 @@ def main() -> None:
             "ordering_strategy": "TIME_MAJOR",
             "warmup": args.warmup,
             "repeats": args.repeats,
+            "solve_ocp": args.solve_ocp,
+            "tolerance": args.tolerance,
+            "max_iterations": args.max_iterations,
         },
         "structure": {
             "decision_variables": int(decision_vector.shape[0]),
@@ -553,6 +892,8 @@ def main() -> None:
                 + (transfer_ms + assembly_ms) / 1000.0
             ),
         },
+        "ocp_solves": ocp_solves,
+        "ocp_solve_comparison": solve_comparison,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, allow_nan=False), encoding="utf-8")
