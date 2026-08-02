@@ -5,12 +5,15 @@ from casadi import Function, has_nlpsol, jacobian
 
 from bioptim import (
     BoundsList,
+    ConstraintFcn,
+    ConstraintList,
     DefectType,
     DynamicsOptions,
     DynamicsOptionsList,
     OdeSolver,
     OptimalControlProgram,
     OrderingStrategy,
+    Node,
     PhaseDynamics,
     Solver,
     TorqueBiorbdModel,
@@ -21,7 +24,12 @@ from bioptim.interfaces.ipopt_interface import IpoptInterface
 from tests.utils import TestUtils
 
 
-def _prepare_scaled_pendulum(ode_solver, ordering_strategy=OrderingStrategy.TIME_MAJOR, n_shooting=3):
+def _prepare_scaled_pendulum(
+    ode_solver,
+    ordering_strategy=OrderingStrategy.TIME_MAJOR,
+    n_shooting=3,
+    n_threads=1,
+):
     from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
 
     return ocp_module.prepare_ocp(
@@ -29,6 +37,7 @@ def _prepare_scaled_pendulum(ode_solver, ordering_strategy=OrderingStrategy.TIME
         final_time=1,
         n_shooting=n_shooting,
         ode_solver=ode_solver,
+        n_threads=n_threads,
         ordering_strategy=ordering_strategy,
     )
 
@@ -163,3 +172,35 @@ def test_fatrop_solves_scaled_pendulum(ode_solver):
 
     assert solution.status == 0
     assert np.max(np.abs(np.array(solution.constraints))) < 1e-6
+
+
+@pytest.mark.skipif(not has_nlpsol("fatrop"), reason="CasADi was built without FATROP")
+def test_fatrop_interleaves_multi_thread_path_constraints_by_stage():
+    ocp = _prepare_scaled_pendulum(
+        OdeSolver.COLLOCATION(polynomial_degree=3),
+        n_shooting=30,
+        n_threads=2,
+    )
+    constraints = ConstraintList()
+    constraints.add(
+        ConstraintFcn.TRACK_STATE,
+        key="q",
+        index=0,
+        node=Node.ALL_SHOOTING,
+        min_bound=-10.0,
+        max_bound=10.0,
+    )
+    ocp.update_constraints(constraints)
+
+    # The mapped path constraint used to be appended as one vector at node
+    # zero, which made FATROP reject an otherwise valid OCP structure.
+    assert next(penalty for penalty in ocp.nlp[0].g if penalty).multi_thread
+
+    solver = Solver.FATROP()
+    solver.set_print_level(0)
+    solution = ocp.solve(solver)
+
+    assert solution.status == 0
+    constraint_values = np.array(solution.constraints)
+    assert np.all(np.isfinite(constraint_values))
+    assert np.max(np.abs(constraint_values)) <= 10.0

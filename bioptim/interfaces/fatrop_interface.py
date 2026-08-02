@@ -81,6 +81,14 @@ class FatropInterface(SolverInterface):
         self.lam_g = None
         self.lam_x = None
 
+        # CasADi/FATROP expects path constraints to be grouped with the stage
+        # whose x/u variables they use.  Bioptim evaluates multi-threaded
+        # penalties in one mapped call, but the generic interface historically
+        # appended that complete vector at node zero.  Splitting the mapped
+        # result back into node-sized blocks preserves parallel evaluation
+        # while restoring the stage-wise sparsity required by FATROP.
+        self.stage_wise_multi_thread_constraints = True
+
     def online_optim(self, ocp, show_options: AnyDictOptional = None):
         """
         Declare the online callback to update the graphs while optimizing

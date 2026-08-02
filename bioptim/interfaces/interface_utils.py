@@ -575,11 +575,38 @@ def generic_get_all_penalties(
                     1,
                 )
             )
-            out[0] = vertcat(out[0], interface.transform_penalty_value(penalty, nlp, penalty_value))
-            if get_bounds:
-                if penalty.bounds is None:
-                    raise RuntimeError("Cannot get bounds if penalty.bounds is None")
-                out_bounds[0].concatenate(bound_tp)
+            penalty_value = interface.transform_penalty_value(penalty, nlp, penalty_value)
+            split_by_stage = (
+                get_bounds
+                and getattr(interface, "stage_wise_multi_thread_constraints", False)
+                and isinstance(nlp, NonLinearProgram)
+                and len(penalty.node_idx) > 1
+            )
+            if split_by_stage:
+                rows_per_node, remainder = divmod(
+                    penalty_value.shape[0], len(penalty.node_idx)
+                )
+                if remainder:
+                    raise RuntimeError(
+                        f"Cannot distribute multi-thread constraint {penalty.name} over "
+                        f"{len(penalty.node_idx)} stages: {penalty_value.shape[0]} rows."
+                    )
+                if penalty.bounds.shape[0] != rows_per_node:
+                    raise RuntimeError(
+                        f"Cannot distribute bounds for multi-thread constraint {penalty.name}: "
+                        f"expected {rows_per_node} rows per stage, got {penalty.bounds.shape[0]}."
+                    )
+                for position, node_idx in enumerate(penalty.node_idx):
+                    first_row = position * rows_per_node
+                    last_row = first_row + rows_per_node
+                    out[node_idx] = vertcat(out[node_idx], penalty_value[first_row:last_row])
+                    out_bounds[node_idx].concatenate(penalty.bounds)
+            else:
+                out[0] = vertcat(out[0], penalty_value)
+                if get_bounds:
+                    if penalty.bounds is None:
+                        raise RuntimeError("Cannot get bounds if penalty.bounds is None")
+                    out_bounds[0].concatenate(bound_tp)
         else:
             for idx in range(len(penalty.node_idx)):
                 if nlp:
