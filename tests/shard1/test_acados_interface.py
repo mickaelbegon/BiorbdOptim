@@ -114,6 +114,97 @@ def test_acados_v055_diagnostics_snapshot():
     npt.assert_equal(feasible_qp_diagnostics["step_sizes"], [1.0, 0.5])
 
 
+def test_acados_initialize_solver_builds_native_capsule_without_solving(monkeypatch):
+    pytest.importorskip("acados_template")
+    import bioptim.interfaces.acados_interface as acados_module
+
+    events = []
+
+    class FakeNativeSolver:
+        def __init__(self):
+            self.solve_calls = 0
+
+        def solve(self):
+            self.solve_calls += 1
+            return 0
+
+    native_solver = FakeNativeSolver()
+
+    def fake_constructor(*_args, **kwargs):
+        events.append(("construct", kwargs))
+        return native_solver
+
+    monkeypatch.setattr(acados_module, "AcadosOcpSolver", fake_constructor)
+
+    class FakeOptions:
+        check_reuse_possible = False
+        c_compile = True
+        tol_code_reuse = 1e-12
+        only_first_options_has_changed = False
+        reset_solver_before_solve = False
+        has_tolerance_changed = False
+
+        def as_dict(self, _interface):
+            return {"nlp_solver_max_iter": 12}
+
+        def set_only_first_options_has_changed(self, value):
+            events.append(("only_first_options", value))
+
+        def set_has_tolerance_changed(self, value):
+            events.append(("tolerance_changed", value))
+
+    interface = object.__new__(acados_module.AcadosInterface)
+    interface.ocp = object()
+    interface.opts = FakeOptions()
+    interface.ocp_solver = None
+    interface.acados_ocp = SimpleNamespace(
+        solver_options=SimpleNamespace(),
+        code_gen_options=SimpleNamespace(json_file="generated/acados_ocp.json"),
+    )
+    interface._AcadosInterface__set_costs = lambda ocp: events.append(
+        ("costs", ocp)
+    )
+    interface._AcadosInterface__set_constraints = lambda ocp: events.append(
+        ("constraints", ocp)
+    )
+    interface._AcadosInterface__update_solver = lambda: events.append(
+        ("update", interface.ocp_solver)
+    )
+    interface._AcadosInterface__restore_solver_state = lambda: events.append(
+        ("restore", interface.ocp_solver)
+    )
+    interface.get_optimized_value = lambda: {"status": "solved"}
+
+    returned_solver = interface.initialize_solver()
+
+    assert returned_solver is native_solver
+    assert interface.ocp_solver is native_solver
+    assert native_solver.solve_calls == 0
+    assert interface.acados_ocp.solver_options.nlp_solver_max_iter == 12
+    assert [event[0] for event in events] == [
+        "costs",
+        "constraints",
+        "construct",
+        "only_first_options",
+        "tolerance_changed",
+        "update",
+        "restore",
+    ]
+    assert events[2][1] == {
+        "json_file": "generated/acados_ocp.json",
+        "build": True,
+        "generate": True,
+        "check_reuse_possible": False,
+        "tol_code_reuse": 1e-12,
+    }
+
+    result = interface.solve()
+
+    assert result == {"status": "solved"}
+    assert native_solver.solve_calls == 1
+    assert sum(event[0] == "construct" for event in events) == 1
+
+
 def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
     pytest.importorskip("acados_template")
     from acados_template import AcadosOcp

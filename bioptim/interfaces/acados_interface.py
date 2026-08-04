@@ -1240,22 +1240,16 @@ class AcadosInterface(SolverInterface):
             qp_solver=self.acados_ocp.solver_options.qp_solver,
         )
 
-    def solve(self, expand_during_shake_tree: Bool = False) -> AnyListorDict:
-        """
-        Solve the prepared ocp
+    def initialize_solver(self):
+        """Create and populate the native Acados solver without solving the NLP.
 
-        Parameters
-        ----------
-        expand_during_shake_tree: bool
-            If the casadi graph should be expanded during the shake tree phase. This value is ignored for ACADOS
-
-        Returns
-        -------
-        A reference to the solution
+        This is useful when an application must use the generated dynamics
+        capsule to prepare an initial guess before the first SQP linearization.
+        A subsequent call to :meth:`solve` reuses the same native solver and
+        refreshes its numerical data from the OCP.
         """
 
-        tic = perf_counter()
-        # Populate costs and constraints vectors
+        # Populate costs and constraints vectors before code generation.
         self.__set_costs(self.ocp)
         self.__set_constraints(self.ocp)
 
@@ -1292,6 +1286,24 @@ class AcadosInterface(SolverInterface):
 
         self.__update_solver()
         self.__restore_solver_state()
+        return self.ocp_solver
+
+    def solve(self, expand_during_shake_tree: Bool = False) -> AnyListorDict:
+        """
+        Solve the prepared ocp
+
+        Parameters
+        ----------
+        expand_during_shake_tree: bool
+            If the casadi graph should be expanded during the shake tree phase. This value is ignored for ACADOS
+
+        Returns
+        -------
+        A reference to the solution
+        """
+
+        tic = perf_counter()
+        self.initialize_solver()
         self.status = self.ocp_solver.solve()
         self.real_time_to_optimize = perf_counter() - tic
         return self.get_optimized_value()
