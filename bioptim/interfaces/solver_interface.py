@@ -1,3 +1,5 @@
+import numpy as np
+
 from ..misc.parameters_types import Bool, AnyDict, AnyListorDict, CX
 
 
@@ -57,6 +59,30 @@ class SolverInterface:
         self.initial_nlp_audit_enabled = False
         self.initial_nlp_audits = []
         self._initial_nlp_constraint_audit_function = None
+        self._next_initial_guess_override = None
+
+    def set_next_initial_guess_override(self, values) -> None:
+        """Submit an exact, scaled decision vector to the next solve only."""
+
+        candidate = np.asarray(values, dtype=float).reshape(-1, 1)
+        if candidate.size == 0 or not np.all(np.isfinite(candidate)):
+            raise ValueError("The one-shot NLP initial guess must be finite and non-empty.")
+        self._next_initial_guess_override = candidate.copy()
+
+    def consume_initial_guess_override(self, default_values):
+        """Return and clear a one-shot scaled decision-vector override."""
+
+        if self._next_initial_guess_override is None:
+            return default_values
+        candidate = self._next_initial_guess_override
+        self._next_initial_guess_override = None
+        expected = np.asarray(default_values).size
+        if candidate.size != expected:
+            raise ValueError(
+                "The one-shot NLP initial guess has "
+                f"{candidate.size} values; expected {expected}."
+            )
+        return candidate
 
     def enable_initial_nlp_audit(self, enabled: Bool = True) -> None:
         """Enable exact pre-solve evaluations of the submitted ``g(x0)``."""

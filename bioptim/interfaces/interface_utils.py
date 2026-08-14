@@ -114,6 +114,9 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
     v = interface.ocp.variables_vector
     v_bounds = interface.ocp.bounds_vectors
     v_init = interface.ocp.init_vector
+    consume_override = getattr(interface, "consume_initial_guess_override", None)
+    if callable(consume_override):
+        v_init = consume_override(v_init)
 
     # Shake the tree if needed for objectives
     raw_objectives = interface.dispatch_obj_func()
