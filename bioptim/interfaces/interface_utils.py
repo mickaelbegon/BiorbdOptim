@@ -5,6 +5,7 @@ from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX,
 import numpy as np
 
 from .solver_interface import SolverInterface
+from .c_compile_cache import cached_nlpsol
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -157,7 +158,18 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         "ubg": all_g_bounds.max,
         "x0": v_init,
     }
-    if interface.shaked_ocp_solver is None or not can_skip_shake_objectives or not can_skip_shake_constraints:
+    compile_configuration = (
+        interface.opts.c_compile,
+        getattr(interface.opts, "compiler_flags", ()),
+        getattr(interface.opts, "cache_dir", None),
+        getattr(interface.opts, "cache_name", "ipopt"),
+    )
+    if (
+        interface.shaked_ocp_solver is None
+        or not can_skip_shake_objectives
+        or not can_skip_shake_constraints
+        or getattr(interface, "_c_compile_configuration", compile_configuration) != compile_configuration
+    ):
         interface.nlp = {"x": v, "f": sum1(interface.shaked_objectives), "g": interface.shaked_constraints}
         # The symbolic constraint graph may have changed.  Do not let an
         # evaluator cached for a previous RHO inspect a stale graph.
@@ -167,12 +179,28 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
 
         if interface.c_compile:
             plugin_name = interface.solver_name.lower()
-            nlpsol("nlpsol", plugin_name, interface.nlp, options).generate_dependencies("nlp.c")
-            interface.shaked_ocp_solver = nlpsol(
-                "nlpsol", plugin_name, Importer("nlp.c", "shell"), options
-            )
+            if compile_configuration[2] is not None:
+                interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol(
+                    plugin_name,
+                    interface.nlp,
+                    options,
+                    compiler_flags=compile_configuration[1],
+                    cache_dir=compile_configuration[2],
+                    cache_name=compile_configuration[3],
+                )
+            else:
+                nlpsol("nlpsol", plugin_name, interface.nlp, options).generate_dependencies("nlp.c")
+                interface.shaked_ocp_solver = nlpsol(
+                    "nlpsol",
+                    plugin_name,
+                    Importer("nlp.c", "shell", {"flags": list(compile_configuration[1])}),
+                    options,
+                )
+                interface.c_compile_cache_info = None
         else:
             interface.shaked_ocp_solver = nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
+            interface.c_compile_cache_info = None
+        interface._c_compile_configuration = compile_configuration
 
     if interface.lam_g is not None:
         interface.limits["lam_g0"] = interface.lam_g

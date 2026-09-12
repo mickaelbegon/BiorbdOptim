@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import os
+import re
 from typing import Any
 
 from ..misc.enums import SolverType, OnlineOptim
@@ -111,6 +113,9 @@ class IPOPT(GenericSolver):
     _bound_frac: Float = 0.01
     _print_level: Int = 5
     _c_compile: Bool = False
+    _compiler_flags: tuple[str, ...] = ()
+    _cache_dir: str | None = None
+    _cache_name: str = "ipopt"
     _check_derivatives_for_naninf: Str = "no"  # "yes"
 
     @property
@@ -210,6 +215,18 @@ class IPOPT(GenericSolver):
         return self._c_compile
 
     @property
+    def compiler_flags(self) -> tuple[str, ...]:
+        return self._compiler_flags
+
+    @property
+    def cache_dir(self) -> str | None:
+        return self._cache_dir
+
+    @property
+    def cache_name(self) -> str:
+        return self._cache_name
+
+    @property
     def check_derivatives_for_naninf(self) -> Bool:
         return self._check_derivatives_for_naninf
 
@@ -282,8 +299,41 @@ class IPOPT(GenericSolver):
     def set_print_level(self, num: Int) -> None:
         self._print_level = num
 
-    def set_c_compile(self, val: Bool) -> None:
+    def set_c_compile(
+        self,
+        val: Bool,
+        *,
+        compiler_flags: list[str] | tuple[str, ...] = (),
+        cache_dir: str | os.PathLike | None = None,
+        cache_name: str = "ipopt",
+    ) -> None:
+        """Compile NLP callbacks, optionally keeping a reusable native library.
+
+        ``set_c_compile(True)`` retains the existing compilation behavior. Pass
+        ``compiler_flags=["-O1"]`` to select optimization explicitly. These are
+        compiler arguments, not IPOPT options. With ``cache_dir``, compilation
+        uses GCC on Linux and loads the cached shared library directly on later
+        builds, including in another process. The cache still generates and
+        hashes C source on a hit; it does not cache the IPOPT solver instance.
+        This initial persistent-cache implementation accepts optimization
+        levels ``-O0`` through ``-O3``, ``-Os``, ``-Og``, and ``-g`` flags only.
+
+        Use a private, trusted cache directory: its contents are executable
+        code. Entries are keyed by generated source, compiler, flags, CasADi,
+        and platform, within ``cache_name``. The name must be a simple label.
+        Compiler flags are trusted build configuration. Supplying this method
+        again resets unspecified compilation settings to their defaults.
+        """
+        if not isinstance(compiler_flags, (list, tuple)) or not all(
+            isinstance(flag, str) and flag and "\x00" not in flag for flag in compiler_flags
+        ):
+            raise TypeError("compiler_flags must be a list or tuple of nonempty strings")
+        if not isinstance(cache_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", cache_name):
+            raise ValueError("cache_name must be a simple label containing letters, digits, '.', '_' or '-'")
         self._c_compile = val
+        self._compiler_flags = tuple(compiler_flags)
+        self._cache_dir = os.fspath(cache_dir) if cache_dir is not None else None
+        self._cache_name = cache_name
 
     def set_check_derivatives_for_naninf(self, val: Bool) -> None:
         string_val = "yes" if val else "no"
@@ -340,7 +390,16 @@ class IPOPT(GenericSolver):
     def as_dict(self, solver):
         solver_options = self.__dict__
         options = {}
-        non_python_options = ["_c_compile", "type", "show_online_optim", "online_optim", "show_options"]
+        non_python_options = [
+            "_c_compile",
+            "_compiler_flags",
+            "_cache_dir",
+            "_cache_name",
+            "type",
+            "show_online_optim",
+            "online_optim",
+            "show_options",
+        ]
         for key in solver_options:
             if key not in non_python_options:
                 ipopt_key = "ipopt." + key[1:]
