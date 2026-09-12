@@ -44,12 +44,15 @@ def _validate_entry(entry, signature):
     return library
 
 
-def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache_name):
+def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache_name, vm_solver=None):
     """Build/load callbacks with a Linux GCC toolchain; return solver and metadata.
 
     The caller owns the cache. Checksums detect accidental corruption, not a
     malicious writer with access to that user's directory. Staging and atomic
     directory publication prevent readers from observing a partial build.
+    ``vm_solver`` may supply prepared/transformed callbacks for generation;
+    ``options`` must contain the options for native library reload, without
+    those injected VM callbacks. Generated-source hashing covers transforms.
     """
     if platform.system() != "Linux":
         raise NotImplementedError("Persistent NLP compilation currently supports Linux with GCC only")
@@ -77,7 +80,8 @@ def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache
             raise RuntimeError(f"Cannot identify GCC toolchain component {tool}: {executable}")
         resolved = Path(resolved).resolve()
         toolchain[tool] = {"path": str(resolved), "sha256": _sha256(resolved)}
-    vm_solver = casadi.nlpsol("nlpsol", plugin_name, nlp, options)
+    if vm_solver is None:
+        vm_solver = casadi.nlpsol("nlpsol", plugin_name, nlp, options)
     with tempfile.TemporaryDirectory(prefix=f".{cache_name}-", dir=root) as temporary:
         staging = Path(temporary)
         # Equivalent to generate_dependencies(), using the directory-prefix API

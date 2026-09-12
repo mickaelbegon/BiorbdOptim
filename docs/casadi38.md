@@ -8,6 +8,43 @@ does not establish a solve-time improvement.
 
 Official release notes: <https://web.casadi.org/get/> (3.8.0, August 22, 2026).
 
+## Opt-in IPOPT callback simplification
+
+```python
+solver = Solver.IPOPT()
+solver.set_function_transform(True)
+# Optional native compilation, paid during preparation:
+solver.set_c_compile(True, compiler_flags=["-O1"], cache_dir="/private/path/callback-cache")
+```
+
+`set_function_transform(True)` requires CasADi >= 3.8 and its experimental
+`Function.transform` API. It builds the IPOPT callbacks, then applies the
+explicit pipeline `[["simplify", "cse", "ref_count", "const_folding"]]` to each
+callback, including the primal functions, Jacobian and exact Lagrangian
+Hessian. Limited-memory Hessian mode is also supported. SX and MX functions
+retain their symbolic representation. The pipeline never uses `empty_inputs`
+or the API's default implicit simplification flow. Each transformed callback
+must preserve its input/output names, shapes and sparsities; otherwise solver
+construction raises an error. The default remains disabled and works with
+CasADi 3.7.2. Explicit activation on older versions raises a clear error.
+
+The transformed callbacks are installed through CasADi's function `cache`
+option. This is distinct from Bioptim's persistent native compilation cache.
+Changing the activation flag rebuilds the in-memory solver. When compilation
+is requested, code generation uses the transformed callbacks, while native
+reload uses the original solver options so it actually evaluates compiled C.
+The persistent cache hashes the generated source, so a changed transformation
+result invalidates the native entry. A native cache hit still pays solver
+construction, transformation and code-generation costs; it skips compilation.
+An unchanged graph and configuration reuse the existing in-memory solver.
+
+`ocp`'s solver interface records `function_transform_info` with the explicit
+passes, total preparation time and per-callback transformation time/instruction
+counts. Preparation should be reported separately from warm optimization
+time. Instruction reductions do not by themselves establish faster RHO cycles;
+end-to-end certification and timing are still necessary. The feature uses an
+API marked internal by CasADi and remains experimental.
+
 ## Installation
 
 ```bash

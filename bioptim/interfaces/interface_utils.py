@@ -6,6 +6,7 @@ import numpy as np
 
 from .solver_interface import SolverInterface
 from .c_compile_cache import cached_nlpsol
+from .function_transform import transformed_nlpsol
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -163,6 +164,7 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         getattr(interface.opts, "compiler_flags", ()),
         getattr(interface.opts, "cache_dir", None),
         getattr(interface.opts, "cache_name", "ipopt"),
+        getattr(interface.opts, "function_transform", False),
     )
     if (
         interface.shaked_ocp_solver is None
@@ -176,6 +178,12 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         interface._initial_nlp_constraint_audit_function = None
         interface.c_compile = interface.opts.c_compile
         options = interface.opts.as_dict(interface)
+        prepared_solver = None
+        interface.function_transform_info = None
+        if compile_configuration[4]:
+            if interface.solver_name.lower() != "ipopt":
+                raise ValueError("function_transform is currently supported only for IPOPT")
+            prepared_solver, interface.function_transform_info = transformed_nlpsol(interface.nlp, options)
 
         if interface.c_compile:
             plugin_name = interface.solver_name.lower()
@@ -187,9 +195,12 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
                     compiler_flags=compile_configuration[1],
                     cache_dir=compile_configuration[2],
                     cache_name=compile_configuration[3],
+                    vm_solver=prepared_solver,
                 )
             else:
-                nlpsol("nlpsol", plugin_name, interface.nlp, options).generate_dependencies("nlp.c")
+                if prepared_solver is None:
+                    prepared_solver = nlpsol("nlpsol", plugin_name, interface.nlp, options)
+                prepared_solver.generate_dependencies("nlp.c")
                 interface.shaked_ocp_solver = nlpsol(
                     "nlpsol",
                     plugin_name,
@@ -198,7 +209,11 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
                 )
                 interface.c_compile_cache_info = None
         else:
-            interface.shaked_ocp_solver = nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
+            interface.shaked_ocp_solver = (
+                prepared_solver
+                if prepared_solver is not None
+                else nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
+            )
             interface.c_compile_cache_info = None
         interface._c_compile_configuration = compile_configuration
 

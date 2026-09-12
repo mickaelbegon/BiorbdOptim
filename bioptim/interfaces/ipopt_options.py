@@ -116,6 +116,7 @@ class IPOPT(GenericSolver):
     _compiler_flags: tuple[str, ...] = ()
     _cache_dir: str | None = None
     _cache_name: str = "ipopt"
+    _function_transform: Bool = False
     _check_derivatives_for_naninf: Str = "no"  # "yes"
 
     @property
@@ -225,6 +226,27 @@ class IPOPT(GenericSolver):
     @property
     def cache_name(self) -> str:
         return self._cache_name
+
+    @property
+    def function_transform(self) -> Bool:
+        return self._function_transform
+
+    def set_function_transform(self, val: Bool) -> None:
+        """Opt into CasADi >= 3.8 callback simplification before solve/codegen.
+
+        Applies ``cse``, ``ref_count`` and ``const_folding`` in that order.
+        Empty inputs, callback signatures and derivative sparsities are kept.
+        Preparation is repeated on graph changes, even with a native cache hit.
+        This experimental option defaults to False; it requires the internal
+        CasADi Function.transform API and does not promise a solve-time gain.
+        """
+        if not isinstance(val, bool):
+            raise TypeError("function_transform must be a bool")
+        if val:
+            from .function_transform import require_function_transform
+
+            require_function_transform()
+        self._function_transform = val
 
     @property
     def check_derivatives_for_naninf(self) -> Bool:
@@ -395,6 +417,7 @@ class IPOPT(GenericSolver):
             "_compiler_flags",
             "_cache_dir",
             "_cache_name",
+            "_function_transform",
             "type",
             "show_online_optim",
             "online_optim",
