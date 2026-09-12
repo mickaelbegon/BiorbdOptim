@@ -5,7 +5,10 @@ on:
     paths:
       - ".github/madnlp-linux-environment.yml"
       - ".github/scripts/install_biorbd_casadi_linux.sh"
+      - ".github/patches/biorbd-casadi38.patch"
       - ".github/workflows/madnlp_linux.yml"
+      - "environment-casadi38.yml"
+      - "pyproject.toml"
       - "benchmarks/**"
       - "bioptim/interfaces/**"
       - "bioptim/optimization/**"
@@ -26,7 +29,7 @@ permissions:
   contents: read
 
 env:
-  CASADI_VERSION: "3.7.2"
+  CASADI_VERSION: "3.8.0"
   MADNLP_ARCHIVE: madnlp-jl1.10.4-ubuntu-20.04-x64.zip
   MADNLP_SHA256: 333c42a1beb04fdba84410cc861927a74c3591c3b9cffd15323cbfeb44fbc8a0
   MADNLP_URL: https://github.com/tmmsartor/madnlp_c/releases/download/nightly-cpu_only/madnlp-jl1.10.4-ubuntu-20.04-x64.zip
@@ -96,7 +99,7 @@ jobs:
           PY
 
       - name: Run MadNLP tests
-        run: pytest -q tests/shard4/test_madnlp.py tests/shard5/test_solver_options.py
+        run: pytest -q tests/shard4/test_madnlp.py tests/shard4/test_biorbd_model.py tests/shard5/test_solver_options.py
 
       - name: Run three-solver smoke benchmark
         env:

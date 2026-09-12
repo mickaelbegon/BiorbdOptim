@@ -22,6 +22,8 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+# Requires RBDL/biorbd rebuilt against the selected CasADi wheel; see docs/casadi38.md.
+casadi38 = ["casadi>=3.8,<3.9"]
 conda_only = [
     "biorbd >=1.12.0",
     "pinocchio",
