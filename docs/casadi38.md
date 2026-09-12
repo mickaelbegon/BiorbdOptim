@@ -45,6 +45,46 @@ time. Instruction reductions do not by themselves establish faster RHO cycles;
 end-to-end certification and timing are still necessary. The feature uses an
 API marked internal by CasADi and remains experimental.
 
+## Separate native callback compilation
+
+The opt-in separate mode emits one C translation unit and shared library per
+selected IPOPT evaluation callback. It retains the symbolic NLP oracle and the
+prepared `nlp_grad` callback in the VM, including their multiplier/sensitivity
+behavior, and can be combined with `set_function_transform(True)`:
+
+```python
+solver.set_c_compile_callbacks(
+    True,
+    cache_dir="/private/path/callback-cache",
+    compiler_flags=["-O1"],
+    callbacks=["nlp_f", "nlp_g", "nlp_grad_f"],
+)
+```
+
+The explicit subset above leaves Jacobian and Hessian evaluations in the VM.
+Omit `callbacks` to compile all evaluation callbacks created by IPOPT, also
+including `nlp_jac_g` and `nlp_hess_l` when present. Limited-memory mode does not
+create an exact Hessian callback. `nlp_grad` is not a selectable native callback.
+It can be needed after the solve even when its reported call count is zero.
+
+This mode requires a private persistent cache directory and Linux/GCC; its cache
+ownership, checksum, toolchain and permitted compiler-flag checks match
+`set_c_compile`. Each callback is independently content-addressed and atomically
+published, including across processes. A failed later callback build leaves any
+already completed, valid callback entries reusable; no solver is returned until
+all requested callbacks are ready. Code generation still runs on cache hits.
+The interface's `c_compile_cache_info` records `mode="callbacks"`, the actual
+`native_callbacks` and individual cache-hit/library details. It does not expose
+one monolithic `library` field in this mode.
+
+Call `set_c_compile` again to select the historical monolithic mode, or
+`set_c_compile_callbacks(False)` to disable compilation. Changing the subset
+rebuilds the solver. Solver-level CasADi `jit=True` is rejected in separate mode.
+Smaller translation units avoid generating the oracle and `nlp_grad` redundantly,
+but a large individual Jacobian or Hessian can still take substantial compiler
+time. This API has small-NLP equivalence and fresh-process reload coverage; it
+does not establish an end-to-end speedup on the real RHO model.
+
 ## Installation
 
 ```bash

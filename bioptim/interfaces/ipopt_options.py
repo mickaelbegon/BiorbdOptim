@@ -117,6 +117,8 @@ class IPOPT(GenericSolver):
     _cache_dir: str | None = None
     _cache_name: str = "ipopt"
     _function_transform: Bool = False
+    _c_compile_callbacks: Bool = False
+    _native_callbacks: tuple[str, ...] | None = None
     _check_derivatives_for_naninf: Str = "no"  # "yes"
 
     @property
@@ -218,6 +220,14 @@ class IPOPT(GenericSolver):
     @property
     def compiler_flags(self) -> tuple[str, ...]:
         return self._compiler_flags
+
+    @property
+    def c_compile_callbacks(self) -> Bool:
+        return self._c_compile_callbacks
+
+    @property
+    def native_callbacks(self) -> tuple[str, ...] | None:
+        return self._native_callbacks
 
     @property
     def cache_dir(self) -> str | None:
@@ -356,6 +366,41 @@ class IPOPT(GenericSolver):
         self._compiler_flags = tuple(compiler_flags)
         self._cache_dir = os.fspath(cache_dir) if cache_dir is not None else None
         self._cache_name = cache_name
+        self._c_compile_callbacks = False
+        self._native_callbacks = None
+
+    def set_c_compile_callbacks(
+        self, val: Bool, *, cache_dir: str | os.PathLike | None = None,
+        callbacks: list[str] | tuple[str, ...] | None = None,
+        compiler_flags: list[str] | tuple[str, ...] = ("-O1",), cache_name: str = "ipopt",
+    ) -> None:
+        """Compile IPOPT evaluations into separate, persistently cached libraries.
+
+        Retains the symbolic oracle and ``nlp_grad`` in the VM and supports
+        ``set_function_transform(True)``. ``callbacks=None`` selects the created
+        f/g/grad_f/jac_g/hess_l callbacks; an explicit list uses their full names
+        (for example ``["nlp_f", "nlp_g", "nlp_grad_f"]``). Unselected callbacks
+        remain in the VM. A trusted private ``cache_dir`` is required when enabled.
+        GCC/Linux and cache/flag restrictions match ``set_c_compile``. Compilation
+        remains outside the solve, and individual large derivatives may still
+        require substantial compiler time. Calling ``set_c_compile`` restores the
+        historical monolithic mode; calling this method selects separate mode.
+        """
+        from .c_compile_cache import IPOPT_NATIVE_CALLBACKS
+
+        if not isinstance(val, bool):
+            raise TypeError("c_compile_callbacks must be a bool")
+        if val and cache_dir is None:
+            raise ValueError("Separate callback compilation requires cache_dir")
+        if callbacks is not None and (
+            not isinstance(callbacks, (list, tuple)) or not callbacks
+            or any(name not in IPOPT_NATIVE_CALLBACKS for name in callbacks)
+            or len(set(callbacks)) != len(callbacks)
+        ):
+            raise ValueError("callbacks must contain distinct IPOPT evaluation callback names")
+        self.set_c_compile(val, compiler_flags=compiler_flags, cache_dir=cache_dir, cache_name=cache_name)
+        self._c_compile_callbacks = val
+        self._native_callbacks = tuple(callbacks) if callbacks is not None else None
 
     def set_check_derivatives_for_naninf(self, val: Bool) -> None:
         string_val = "yes" if val else "no"
@@ -418,6 +463,8 @@ class IPOPT(GenericSolver):
             "_cache_dir",
             "_cache_name",
             "_function_transform",
+            "_c_compile_callbacks",
+            "_native_callbacks",
             "type",
             "show_online_optim",
             "online_optim",

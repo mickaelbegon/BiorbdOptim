@@ -5,7 +5,7 @@ from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX,
 import numpy as np
 
 from .solver_interface import SolverInterface
-from .c_compile_cache import cached_nlpsol
+from .c_compile_cache import cached_nlpsol, cached_nlpsol_callbacks
 from .function_transform import transformed_nlpsol
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
@@ -165,6 +165,8 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         getattr(interface.opts, "cache_dir", None),
         getattr(interface.opts, "cache_name", "ipopt"),
         getattr(interface.opts, "function_transform", False),
+        getattr(interface.opts, "c_compile_callbacks", False),
+        getattr(interface.opts, "native_callbacks", None),
     )
     if (
         interface.shaked_ocp_solver is None
@@ -187,7 +189,13 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
 
         if interface.c_compile:
             plugin_name = interface.solver_name.lower()
-            if compile_configuration[2] is not None:
+            if compile_configuration[5]:
+                interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol_callbacks(
+                    plugin_name, interface.nlp, options, compiler_flags=compile_configuration[1],
+                    cache_dir=compile_configuration[2], cache_name=compile_configuration[3],
+                    vm_solver=prepared_solver, callbacks=compile_configuration[6],
+                )
+            elif compile_configuration[2] is not None:
                 interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol(
                     plugin_name,
                     interface.nlp,

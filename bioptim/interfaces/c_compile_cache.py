@@ -44,7 +44,70 @@ def _validate_entry(entry, signature):
     return library
 
 
+IPOPT_NATIVE_CALLBACKS = ("nlp_f", "nlp_g", "nlp_grad_f", "nlp_jac_g", "nlp_hess_l")
+
+
 def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache_name, vm_solver=None):
+    """Build/load one complete native NLP library (historical persistent mode)."""
+    return _cached_compiled(
+        plugin_name, nlp, options, compiler_flags=compiler_flags, cache_dir=cache_dir,
+        cache_name=cache_name, vm_solver=vm_solver,
+    )
+
+
+def cached_nlpsol_callbacks(
+    plugin_name, nlp, options, *, compiler_flags, cache_dir, cache_name, vm_solver=None, callbacks=None
+):
+    """Compile selected IPOPT callbacks separately, retaining the symbolic oracle.
+
+    Each callback is independently content-addressed and atomically published.
+    Unselected callbacks, including ``nlp_grad`` needed by post-solve multiplier
+    and sensitivity calculations, retain their prepared VM implementation.
+    ``callbacks=None`` selects all five evaluation callbacks that IPOPT created.
+    """
+    if plugin_name != "ipopt":
+        raise ValueError("Separate callback compilation supports IPOPT only")
+    if cache_dir is None:
+        raise ValueError("Separate callback compilation requires cache_dir")
+    if options.get("jit", False):
+        raise ValueError("Separate callback compilation cannot be combined with solver-level jit")
+    if not isinstance(cache_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", cache_name):
+        raise ValueError("cache_name must be a simple label")
+    if callbacks is not None and (
+        not isinstance(callbacks, (tuple, list)) or not callbacks
+        or any(name not in IPOPT_NATIVE_CALLBACKS for name in callbacks)
+        or len(set(callbacks)) != len(callbacks)
+    ):
+        raise ValueError("callbacks must contain distinct IPOPT evaluation callback names")
+    if vm_solver is None:
+        vm_solver = casadi.nlpsol("nlpsol", plugin_name, nlp, options)
+    prepared = {name: vm_solver.get_function(name) for name in vm_solver.get_function()}
+    selected = tuple(name for name in IPOPT_NATIVE_CALLBACKS if name in prepared) if callbacks is None else callbacks
+    if any(name not in prepared for name in selected):
+        raise ValueError("A selected callback is not used by this IPOPT configuration")
+    information = {}
+    for name in selected:
+        prepared[name], information[name] = _cached_compiled(
+            plugin_name, nlp, options, compiler_flags=compiler_flags, cache_dir=cache_dir,
+            cache_name=f"{cache_name}-{name}", vm_solver=vm_solver, callback_function=prepared[name],
+        )
+    reload_options = {**options, "cache": {**options.get("cache", {}), **prepared}}
+    # These options are applied after the cache by IpoptInterface. Their exact
+    # prepared implementations are already in prepared; avoid reinstalling VM.
+    for option, name in (("grad_f", "nlp_grad_f"), ("jac_g", "nlp_jac_g"), ("hess_lag", "nlp_hess_l")):
+        if name in prepared:
+            reload_options.pop(option, None)
+    solver = casadi.nlpsol("nlpsol", plugin_name, nlp, reload_options)
+    for name in selected:
+        if solver.get_function(name).class_name() != "External":
+            raise RuntimeError(f"IPOPT did not install the native callback {name}")
+    return solver, {"mode": "callbacks", "hit": all(row["hit"] for row in information.values()),
+                    "callbacks": information, "native_callbacks": list(selected)}
+
+
+def _cached_compiled(
+    plugin_name, nlp, options, *, compiler_flags, cache_dir, cache_name, vm_solver=None, callback_function=None
+):
     """Build/load callbacks with a Linux GCC toolchain; return solver and metadata.
 
     The caller owns the cache. Checksums detect accidental corruption, not a
@@ -87,13 +150,16 @@ def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache
         # Equivalent to generate_dependencies(), using the directory-prefix API
         # so concurrent callers never change the process working directory.
         generator = casadi.CodeGenerator("nlp.c")
-        generator.add(vm_solver.oracle())
-        for name in vm_solver.get_function():
-            generator.add(vm_solver.get_function(name))
+        if callback_function is None:
+            generator.add(vm_solver.oracle())
+            for name in vm_solver.get_function():
+                generator.add(vm_solver.get_function(name))
+        else:
+            generator.add(callback_function)
         generator.generate(str(staging) + os.sep)
         source = staging / "nlp.c"
         signature = {
-            "format": 1,
+            "format": 1 if callback_function is None else 2,
             "source_sha256": _sha256(source),
             "casadi_version": casadi.__version__,
             "casadi_git_revision": casadi.CasadiMeta.git_revision(),
@@ -133,7 +199,10 @@ def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache
             if completed.returncode:
                 raise RuntimeError(f"NLP callback compilation failed:\n{completed.stdout}{completed.stderr}")
             # Verify loadability before publishing the artifact.
-            check_solver = casadi.nlpsol("nlpsol", plugin_name, str(library), options)
+            check_solver = (
+                casadi.nlpsol("nlpsol", plugin_name, str(library), options)
+                if callback_function is None else _load_callback(callback_function, library)
+            )
             del check_solver
             (staging / "manifest.json").write_text(
                 json.dumps({"signature": signature, "library_sha256": _sha256(library)}, indent=2) + "\n"
@@ -146,5 +215,19 @@ def cached_nlpsol(plugin_name, nlp, options, *, compiler_flags, cache_dir, cache
                     raise
                 hit = True
         library = _validate_entry(entry, signature)
-        solver = casadi.nlpsol("nlpsol", plugin_name, str(library), options)
+        solver = (
+            casadi.nlpsol("nlpsol", plugin_name, str(library), options)
+            if callback_function is None else _load_callback(callback_function, library)
+        )
         return solver, {"hit": hit, "key": key, "library": str(library)}
+
+
+def _load_callback(reference, library):
+    native = casadi.external(reference.name(), str(library))
+    if not (
+        native.name_in() == reference.name_in() and native.name_out() == reference.name_out()
+        and all(native.sparsity_in(i) == reference.sparsity_in(i) for i in range(reference.n_in()))
+        and all(native.sparsity_out(i) == reference.sparsity_out(i) for i in range(reference.n_out()))
+    ):
+        raise RuntimeError(f"Native callback signature mismatch: {reference.name()}")
+    return native
