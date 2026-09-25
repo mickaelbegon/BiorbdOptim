@@ -643,10 +643,22 @@ class PenaltyOption(OptionGeneric):
         self.weighted_function_non_threaded[node] = self.weighted_function[node]
 
         if controller.ocp.n_threads > 1 and self.multi_thread and len(self.node_idx) > 1:
-            self.function[node] = self.function[node].map(len(self.node_idx), "thread", controller.ocp.n_threads)
-            self.weighted_function[node] = self.weighted_function[node].map(
-                len(self.node_idx), "thread", controller.ocp.n_threads
+            # Threaded continuity dispatch evaluates weighted_function[0] on all
+            # shooting nodes. Keep the per-node scalar functions above (including
+            # the non-threaded copies), but only build the map that is consumed.
+            # Rebuilding node 0 still creates a fresh map; nothing is cached across
+            # penalty updates, changes of horizon, or changes of thread count.
+            unused_continuity_map = (
+                self.type == ConstraintFcn.STATE_CONTINUITY
+                and not self.is_multinode_penalty
+                and self.node_idx[0] == 0
+                and node != 0
             )
+            if not unused_continuity_map:
+                self.function[node] = self.function[node].map(len(self.node_idx), "thread", controller.ocp.n_threads)
+                self.weighted_function[node] = self.weighted_function[node].map(
+                    len(self.node_idx), "thread", controller.ocp.n_threads
+                )
         else:
             self.multi_thread = False  # Override the multi_threading, since only one node is optimized
 
