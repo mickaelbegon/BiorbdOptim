@@ -47,7 +47,7 @@ def _replace(cli: list[str], flag: str, value: str):
         cli.extend((flag, value))
 
 
-def _capture(command: list[str], output: Path, external_cache: Path | None):
+def _capture(command: list[str], output: Path, external_cache: Path | None, max_output_rows: int | None):
     script, cli = Path(command[1]).resolve(), command[2:].copy()
     _replace(cli, "--output-json", str(output / "unused-result.json"))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -63,7 +63,9 @@ def _capture(command: list[str], output: Path, external_cache: Path | None):
     def patched_init(self, ocp):
         original_init(self, ocp)
         if external_cache is not None:
-            self.enable_compiled_thread_map_external("STATE_CONTINUITY", external_cache)
+            self.enable_compiled_thread_map_external(
+                "STATE_CONTINUITY", external_cache, max_output_rows=max_output_rows
+            )
 
     def patched_nlpsol(name, plugin, nlp, options):
         solver = original_nlpsol(name, plugin, nlp, options)
@@ -123,16 +125,16 @@ def _max_error(left, right):
     return max(error(a, b) for a, b in zip(left, right))
 
 
-def _phase(command: list[str], output: Path, external_cache: Path, repeats: int) -> dict:
+def _phase(command: list[str], output: Path, external_cache: Path, repeats: int, max_output_rows: int | None) -> dict:
     """Build and evaluate a native/external NLP once in one OS process."""
 
     output.mkdir(parents=True, exist_ok=True)
     cache_before = sorted(path.name for path in external_cache.glob("*.so")) if external_cache.exists() else []
     tic = time.perf_counter()
-    native = _capture(command, output / "native", None)
+    native = _capture(command, output / "native", None, None)
     native_build_s = time.perf_counter() - tic
     tic = time.perf_counter()
-    external = _capture(command, output / "external", external_cache)
+    external = _capture(command, output / "external", external_cache, max_output_rows)
     external_build_s = time.perf_counter() - tic
     x = ca.DM.zeros(*native.size_in(0))
     g = native.get_function("nlp_g")
@@ -142,6 +144,7 @@ def _phase(command: list[str], output: Path, external_cache: Path, repeats: int)
         "cache_libraries_after": sorted(path.name for path in external_cache.glob("*.so")),
         "native_build_s": native_build_s,
         "external_build_s": external_build_s,
+        "external_max_output_rows": max_output_rows,
         "functions": {},
     }
     for name in ("nlp_f", "nlp_g", "nlp_jac_g", "nlp_hess_l"):
@@ -164,6 +167,10 @@ def main():
     parser.add_argument("--command-log", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument(
+        "--external-max-output-rows", type=int,
+        help="Bound each exact External C output packet; omit for one monolithic kernel.",
+    )
     parser.add_argument("--phase-output", type=Path, help="Run exactly one cold/warm phase in this process.")
     parser.add_argument("--external-cache", type=Path, help="Shared cache for --phase-output.")
     args = parser.parse_args()
@@ -172,7 +179,7 @@ def main():
     if args.phase_output:
         if args.external_cache is None:
             parser.error("--phase-output requires --external-cache")
-        report = _phase(command, args.output, args.external_cache, args.repeats)
+        report = _phase(command, args.output, args.external_cache, args.repeats, args.external_max_output_rows)
         args.phase_output.parent.mkdir(parents=True, exist_ok=True)
         args.phase_output.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))
@@ -190,6 +197,7 @@ def main():
             "--command-log", str(args.command_log.resolve()),
             "--output", str(args.output / label),
             "--repeats", str(args.repeats),
+            *([] if args.external_max_output_rows is None else ["--external-max-output-rows", str(args.external_max_output_rows)]),
             "--external-cache", str(cache.resolve()),
             "--phase-output", str(phase_output.resolve()),
         ]

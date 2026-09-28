@@ -21,7 +21,7 @@ import tempfile
 from contextlib import contextmanager
 
 import casadi as ca
-from casadi import CodeGenerator, Function, external
+from casadi import CodeGenerator, Function, MX, external, vertcat
 
 
 _COMPILER_FLAGS = ("-fPIC", "-shared", "-O3")
@@ -172,3 +172,59 @@ def compile_external_with_exact_derivatives(function: Function, cache_dir: str |
         if loaded is None:
             raise RuntimeError(f"Compiled External cache validation failed for {function.name()}.")
         return loaded
+
+
+def compile_external_output_packets(
+    function: Function, cache_dir: str | Path, max_output_rows: int | None
+) -> Function:
+    """Compile a mapped scalar function as bounded exact-output packets.
+
+    A large ``ThreadMap`` stage is still much smaller than the complete FHO,
+    but its primal plus all second-order helpers can be too large for one C
+    compiler translation unit.  Splitting its *outputs* preserves the same
+    input signature and exact CasADi AD graph while bounding every generated
+    source file.  The returned MX wrapper is deliberately tiny: it only
+    concatenates ``External`` calls, so the global FHO remains MX and
+    non-compiled.
+
+    ``None`` keeps the historical one-library behaviour.  This helper only
+    supports the single-output functions used below Bioptim ``Function.map``.
+    """
+
+    if max_output_rows is None:
+        return compile_external_with_exact_derivatives(function, cache_dir)
+    if not isinstance(max_output_rows, int) or max_output_rows < 1:
+        raise ValueError("max_output_rows must be a positive integer or None")
+    if function.n_out() != 1:
+        raise ValueError("Packetized ThreadMap externals require one function output")
+
+    output_rows = function.size1_out(0)
+    if output_rows <= max_output_rows:
+        return compile_external_with_exact_derivatives(function, cache_dir)
+
+    # Use MX symbols even for an SX source: the wrapper must compose into the
+    # FHO's MX graph and CasADi retains the source function's exact AD helpers.
+    inputs = [MX.sym(function.name_in(index), *function.size_in(index)) for index in range(function.n_in())]
+    output = function(*inputs)
+    if isinstance(output, (tuple, list)):
+        output = output[0]
+    externals = []
+    for start in range(0, output_rows, max_output_rows):
+        stop = min(start + max_output_rows, output_rows)
+        packet = Function(
+            f"{function.name()}_packet_{start:04d}_{stop:04d}",
+            inputs,
+            [output[start:stop]],
+            [function.name_in(index) for index in range(function.n_in())],
+            [function.name_out(0)],
+        )
+        externals.append(compile_external_with_exact_derivatives(packet, cache_dir))
+
+    packetized = vertcat(*[kernel(*inputs) for kernel in externals])
+    return Function(
+        f"{function.name()}_packetized_{max_output_rows}",
+        inputs,
+        [packetized],
+        [function.name_in(index) for index in range(function.n_in())],
+        [function.name_out(0)],
+    )

@@ -3,7 +3,10 @@ import casadi as ca
 from casadi import DM, MX, vertcat
 
 from bioptim.interfaces.post_shake_penalty_registry import PostShakePenaltyRegistry
-from bioptim.interfaces.compiled_thread_map_external import compile_external_with_exact_derivatives
+from bioptim.interfaces.compiled_thread_map_external import (
+    compile_external_output_packets,
+    compile_external_with_exact_derivatives,
+)
 
 
 def test_post_shake_registry_localizes_exact_value_jacobian_hessian_and_global_g_rows():
@@ -235,3 +238,23 @@ def test_compiled_thread_map_external_preserves_exact_jacobian_and_hessian(tmp_p
     assert sorted(tmp_path.glob("*.so")) == libraries_before
     assert sorted(tmp_path.glob("*.json")) == manifests_before
     np.testing.assert_allclose(cached(*args), native(*args), atol=0, rtol=0)
+
+
+def test_packetized_compiled_thread_map_external_preserves_exact_second_order_ad(tmp_path):
+    """Output packetization bounds C units without changing the MX derivatives."""
+
+    x = ca.MX.sym("x", 3)
+    native = ca.Function(
+        "wide_thread_map_stage", [x], [ca.vertcat(x[0] ** 2, ca.sin(x[1]), x[0] * x[2], x[2] ** 3)]
+    )
+    packetized = compile_external_output_packets(native, tmp_path, max_output_rows=2)
+    multiplier = ca.MX.sym("lambda", 4)
+    native_hessian = ca.Function("wide_native_h", [x, multiplier], [ca.hessian(ca.dot(multiplier, native(x)), x)[0]])
+    packet_hessian = ca.Function(
+        "wide_packet_h", [x, multiplier], [ca.hessian(ca.dot(multiplier, packetized(x)), x)[0]]
+    )
+    values = ca.DM([2.0, 0.3, -1.5])
+    lambdas = ca.DM([1.0, -2.0, 3.0, 4.0])
+    np.testing.assert_allclose(packetized(values), native(values), atol=0, rtol=0)
+    np.testing.assert_allclose(packet_hessian(values, lambdas), native_hessian(values, lambdas), atol=0, rtol=0)
+    assert len(list(tmp_path.glob("*.so"))) == 2

@@ -66,6 +66,7 @@ class SolverInterface:
         # stays MX and is never compiled as a whole.
         self.compiled_thread_map_external_penalties = frozenset()
         self.compiled_thread_map_external_cache_dir = None
+        self.compiled_thread_map_external_max_output_rows = None
         self._compiled_thread_map_external_functions = {}
 
     def set_next_initial_guess_override(self, values) -> None:
@@ -96,7 +97,7 @@ class SolverInterface:
 
         self.initial_nlp_audit_enabled = enabled
 
-    def enable_compiled_thread_map_external(self, penalty_names, cache_dir) -> None:
+    def enable_compiled_thread_map_external(self, penalty_names, cache_dir, max_output_rows: int | None = None) -> None:
         """Opt in to exact C kernels below selected repeated ``ThreadMap`` penalties.
 
         This is intentionally an advanced construction-time option. Call it
@@ -111,8 +112,11 @@ class SolverInterface:
             raise ValueError("penalty_names must not be empty")
         if cache_dir is None:
             raise ValueError("cache_dir is required for compiled ThreadMap externals")
+        if max_output_rows is not None and (not isinstance(max_output_rows, int) or max_output_rows < 1):
+            raise ValueError("max_output_rows must be a positive integer or None")
         self.compiled_thread_map_external_penalties = names
         self.compiled_thread_map_external_cache_dir = cache_dir
+        self.compiled_thread_map_external_max_output_rows = max_output_rows
         self._compiled_thread_map_external_functions.clear()
 
     def build_post_shake_penalty_registry(self, expand: Bool = False, materialize: Bool = True):

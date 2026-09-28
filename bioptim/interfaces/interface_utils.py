@@ -8,7 +8,7 @@ from .solver_interface import SolverInterface
 from .c_compile_cache import cached_nlpsol, cached_nlpsol_callbacks
 from .function_transform import transformed_nlpsol
 from .post_shake_penalty_registry import PostShakePenaltyRegistry
-from .compiled_thread_map_external import compile_external_with_exact_derivatives
+from .compiled_thread_map_external import compile_external_output_packets
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -731,8 +731,10 @@ def generic_get_all_penalties(
         source = penalty.weighted_function_non_threaded[0]
         key = id(source)
         if key not in interface._compiled_thread_map_external_functions:
-            interface._compiled_thread_map_external_functions[key] = compile_external_with_exact_derivatives(
-                source, interface.compiled_thread_map_external_cache_dir
+            interface._compiled_thread_map_external_functions[key] = compile_external_output_packets(
+                source,
+                interface.compiled_thread_map_external_cache_dir,
+                interface.compiled_thread_map_external_max_output_rows,
             )
         return interface._compiled_thread_map_external_functions[key]
 
