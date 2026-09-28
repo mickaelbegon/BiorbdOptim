@@ -13,6 +13,7 @@ from pathlib import Path
 import runpy
 import shlex
 import statistics
+import subprocess
 import sys
 import time
 
@@ -122,29 +123,32 @@ def _max_error(left, right):
     return max(error(a, b) for a, b in zip(left, right))
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--command-log", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--repeats", type=int, default=3)
-    args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-    command = _command(args.command_log)
-    native = _capture(command, args.output / "native", None)
-    external = _capture(command, args.output / "external", args.output / "external-cache")
-    x = ca.DM.zeros(native.size_in(0), 1)
-    # IPOPT callback dimensions are solver-independent; use a nonzero g
-    # multiplier vector to exercise the exact second derivative path.
+def _phase(command: list[str], output: Path, external_cache: Path, repeats: int) -> dict:
+    """Build and evaluate a native/external NLP once in one OS process."""
+
+    output.mkdir(parents=True, exist_ok=True)
+    cache_before = sorted(path.name for path in external_cache.glob("*.so")) if external_cache.exists() else []
+    tic = time.perf_counter()
+    native = _capture(command, output / "native", None)
+    native_build_s = time.perf_counter() - tic
+    tic = time.perf_counter()
+    external = _capture(command, output / "external", external_cache)
+    external_build_s = time.perf_counter() - tic
+    x = ca.DM.zeros(*native.size_in(0))
     g = native.get_function("nlp_g")
     lam_g = ca.DM.ones(g.size_out(0), 1)
-    report = {}
+    report = {
+        "cache_libraries_before": cache_before,
+        "cache_libraries_after": sorted(path.name for path in external_cache.glob("*.so")),
+        "native_build_s": native_build_s,
+        "external_build_s": external_build_s,
+        "functions": {},
+    }
     for name in ("nlp_f", "nlp_g", "nlp_jac_g", "nlp_hess_l"):
         native_f, external_f = native.get_function(name), external.get_function(name)
-        native_values = _inputs(native_f, x, lam_g)
-        external_values = _inputs(external_f, x, lam_g)
-        native_s, native_out = _measure(native_f, native_values, args.repeats)
-        external_s, external_out = _measure(external_f, external_values, args.repeats)
-        report[name] = {
+        native_s, native_out = _measure(native_f, _inputs(native_f, x, lam_g), repeats)
+        external_s, external_out = _measure(external_f, _inputs(external_f, x, lam_g), repeats)
+        report["functions"][name] = {
             "native_median_s": native_s,
             "external_median_s": external_s,
             "speedup": native_s / external_s if external_s else None,
@@ -152,7 +156,55 @@ def main():
             "native_nnz": native_f.sparsity_out(0).nnz(),
             "external_nnz": external_f.sparsity_out(0).nnz(),
         }
-    (args.output / "report.json").write_text(json.dumps(report, indent=2))
+    return report
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--command-log", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--phase-output", type=Path, help="Run exactly one cold/warm phase in this process.")
+    parser.add_argument("--external-cache", type=Path, help="Shared cache for --phase-output.")
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    command = _command(args.command_log)
+    if args.phase_output:
+        if args.external_cache is None:
+            parser.error("--phase-output requires --external-cache")
+        report = _phase(command, args.output, args.external_cache, args.repeats)
+        args.phase_output.parent.mkdir(parents=True, exist_ok=True)
+        args.phase_output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        print(json.dumps(report, indent=2))
+        return
+
+    # Spawning each phase makes the cache assertion meaningful: no Python or
+    # CasADi in-memory objects are shared by the cold and warm measurements.
+    cache = args.output / "external-cache"
+    phases = {}
+    for label in ("cold", "warm"):
+        phase_output = args.output / f"{label}.json"
+        child = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--command-log", str(args.command_log.resolve()),
+            "--output", str(args.output / label),
+            "--repeats", str(args.repeats),
+            "--external-cache", str(cache.resolve()),
+            "--phase-output", str(phase_output.resolve()),
+        ]
+        subprocess.run(child, check=True)
+        phases[label] = json.loads(phase_output.read_text(encoding="utf-8"))
+    report = {
+        "description": "Cold then warm External cache measurements in distinct OS processes.",
+        "cold": phases["cold"],
+        "warm": phases["warm"],
+        "external_build_speedup_cold_over_warm": (
+            phases["cold"]["external_build_s"] / phases["warm"]["external_build_s"]
+            if phases["warm"]["external_build_s"] else None
+        ),
+    }
+    (args.output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
 
 

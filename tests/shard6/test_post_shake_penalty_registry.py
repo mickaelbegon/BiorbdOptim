@@ -225,3 +225,13 @@ def test_compiled_thread_map_external_preserves_exact_jacobian_and_hessian(tmp_p
     np.testing.assert_allclose(compiled(*args), native(*args), atol=0, rtol=0)
     np.testing.assert_allclose(compiled_jacobian(*args), native_jacobian(*args), atol=0, rtol=0)
     np.testing.assert_allclose(compiled_hessian(*args, ca.DM([1.0, 2.0])), native_hessian(*args, ca.DM([1.0, 2.0])), atol=0, rtol=0)
+
+    # A second independent call is the normal FHO-successor case: the
+    # content-addressed artifact and its manifest must be reused, rather than
+    # recompiling an identical local stage kernel.
+    libraries_before = sorted(tmp_path.glob("*.so"))
+    manifests_before = sorted(tmp_path.glob("*.json"))
+    cached = compile_external_with_exact_derivatives(native, tmp_path)
+    assert sorted(tmp_path.glob("*.so")) == libraries_before
+    assert sorted(tmp_path.glob("*.json")) == manifests_before
+    np.testing.assert_allclose(cached(*args), native(*args), atol=0, rtol=0)
