@@ -89,6 +89,18 @@ class SolverInterface:
 
         self.initial_nlp_audit_enabled = enabled
 
+    def build_post_shake_penalty_registry(self, expand: Bool = False):
+        """Describe exact canonical penalty terms without changing the NLP.
+
+        The returned registry is intended for advanced code-generation and
+        derivative tooling.  It is invalidated whenever this interface's
+        symbolic problem changes, just like a solver cache.
+        """
+
+        from .interface_utils import build_post_shake_penalty_registry
+
+        return build_post_shake_penalty_registry(self, expand=expand)
+
     def configure(self, **options):
         """
         Set some options

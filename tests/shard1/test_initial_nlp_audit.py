@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.testing as npt
 import pytest
-from casadi import Function
+from casadi import Function, DM
 
 from bioptim import OdeSolver, OrderingStrategy
 from bioptim.examples.toy_examples.feature_examples import example_variable_scaling
@@ -66,6 +66,31 @@ def test_initial_nlp_audit_has_no_evaluator_or_payload_when_disabled(fake_nlpsol
     assert interface.initial_nlp_audits == []
     assert interface._initial_nlp_constraint_audit_function is None
     assert len(fake_nlpsol) == 1
+
+
+def test_post_shake_penalty_registry_uses_final_canonical_constraint_rows():
+    interface = IpoptInterface(_prepare_collocation_ocp(use_sx=False))
+    registry = interface.build_post_shake_penalty_registry()
+
+    constraint_terms = [term for term in registry.terms if term.metadata.kind == "constraint"]
+    assert constraint_terms
+    g, _ = interface.dispatch_bounds()
+    shaked_g = interface_utils._shake_penalties_tree(
+        interface.ocp, g, interface.ocp.variables_vector, interface.ocp.bounds_vectors, False
+    )
+    g_at_initial = np.asarray(Function("registry_g", [interface.ocp.variables_vector], [shaked_g])(
+        interface.ocp.init_vector
+    )).reshape(-1)
+
+    rebuilt_g = np.zeros_like(g_at_initial)
+    for term in constraint_terms:
+        start, stop = term.metadata.g_row_start, term.metadata.g_row_stop
+        local_x = DM(np.asarray(interface.ocp.init_vector).reshape(-1)[list(term.decision_indices)])
+        rebuilt_g[start:stop] = np.asarray(term.value(local_x)).reshape(-1)
+        assert term.jacobian_sparsity.size2() == len(term.decision_indices)
+        assert term.hessian_sparsity.size1() == len(term.decision_indices)
+
+    npt.assert_allclose(rebuilt_g, g_at_initial)
 
 
 @pytest.mark.parametrize("use_sx", [True, False])

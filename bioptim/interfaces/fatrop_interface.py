@@ -186,7 +186,7 @@ class FatropInterface(SolverInterface):
         """
         return generic_dispatch_obj_func(self)
 
-    def get_all_penalties(self, nlp: NonLinearProgram, penalties, get_bounds: bool = False):
+    def get_all_penalties(self, nlp: NonLinearProgram, penalties, get_bounds: bool = False, **kwargs):
         """
         Parse the penalties of the full ocp to a Ipopt-friendly one
 
@@ -203,7 +203,7 @@ class FatropInterface(SolverInterface):
         -------
 
         """
-        return generic_get_all_penalties(self, nlp, penalties, scaled=True, get_bounds=get_bounds)
+        return generic_get_all_penalties(self, nlp, penalties, scaled=True, get_bounds=get_bounds, **kwargs)
 
     @staticmethod
     def _state_scaling(nlp: NonLinearProgram) -> np.ndarray:

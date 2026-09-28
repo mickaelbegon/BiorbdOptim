@@ -7,6 +7,7 @@ import numpy as np
 from .solver_interface import SolverInterface
 from .c_compile_cache import cached_nlpsol, cached_nlpsol_callbacks
 from .function_transform import transformed_nlpsol
+from .post_shake_penalty_registry import PostShakePenaltyRegistry
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -417,6 +418,32 @@ def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayT
     return penalty(vertcat(*dt, v[len(dt) :]))
 
 
+def build_post_shake_penalty_registry(interface: SolverInterface, expand: Bool = False) -> PostShakePenaltyRegistry:
+    """Return an opt-in, exact registry of canonical post-shake NLP terms.
+
+    The normal solve path remains unchanged.  This helper mirrors its generic
+    objective/constraint dispatch, then applies the *same* shake operation to
+    each recorded contribution.  The resulting row indices are the final
+    canonical ``g`` row indices, not local penalty indices.
+    """
+
+    v = interface.ocp.variables_vector
+    v_bounds = interface.ocp.bounds_vectors
+    registry = PostShakePenaltyRegistry()
+    generic_dispatch_obj_func(interface, post_shake_registry=registry)
+    generic_dispatch_bounds(
+        interface,
+        include_g=True,
+        include_g_internal=True,
+        post_shake_registry=registry,
+    )
+    registry.materialize(
+        v,
+        lambda expression: _shake_penalties_tree(interface.ocp, expression, v, v_bounds, expand),
+    )
+    return registry
+
+
 def generic_set_lagrange_multiplier(interface, sol: Solution):
     """
     Set the lagrange multiplier from a solution structure
@@ -432,7 +459,12 @@ def generic_set_lagrange_multiplier(interface, sol: Solution):
     return sol
 
 
-def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool):
+def generic_dispatch_bounds(
+    interface,
+    include_g: Bool,
+    include_g_internal: Bool,
+    post_shake_registry: PostShakePenaltyRegistry | None = None,
+):
     """
     Parse the bounds of the full ocp to a SQP-friendly one
 
@@ -453,13 +485,31 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
     all_g_bounds_dict[-1] = Bounds("all_g", interpolation=InterpolationType.CONSTANT)
 
     if include_g_internal:
-        penalties, bounds = interface.get_all_penalties(interface.ocp, interface.ocp.g_internal, get_bounds=True)
+        penalties, bounds = interface.get_all_penalties(
+            interface.ocp,
+            interface.ocp.g_internal,
+            get_bounds=True,
+            post_shake_registry=post_shake_registry,
+            registry_kind="constraint",
+            registry_scope="ocp_g_internal",
+            registry_phase=None,
+            registry_stage_offset=-1,
+        )
         for (_, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
             all_g_dict[-1] = vertcat(all_g_dict[-1], node_penalty)
             all_g_bounds_dict[-1].concatenate(node_bounds)
 
     if include_g:
-        penalties, bounds = interface.get_all_penalties(interface.ocp, interface.ocp.g, get_bounds=True)
+        penalties, bounds = interface.get_all_penalties(
+            interface.ocp,
+            interface.ocp.g,
+            get_bounds=True,
+            post_shake_registry=post_shake_registry,
+            registry_kind="constraint",
+            registry_scope="ocp_g",
+            registry_phase=None,
+            registry_stage_offset=-1,
+        )
         for (_, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
             all_g_dict[-1] = vertcat(all_g_dict[-1], node_penalty)
             all_g_bounds_dict[-1].concatenate(node_bounds)
@@ -473,13 +523,31 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
             )
 
         if include_g_internal:
-            penalties, bounds = interface.get_all_penalties(nlp, nlp.g_internal, get_bounds=True)
+            penalties, bounds = interface.get_all_penalties(
+                nlp,
+                nlp.g_internal,
+                get_bounds=True,
+                post_shake_registry=post_shake_registry,
+                registry_kind="constraint",
+                registry_scope="nlp_g_internal",
+                registry_phase=nlp.phase_idx,
+                registry_stage_offset=base_idx,
+            )
             for (node_idx, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
                 all_g_dict[base_idx + node_idx] = vertcat(all_g_dict[base_idx + node_idx], node_penalty)
                 all_g_bounds_dict[base_idx + node_idx].concatenate(node_bounds)
 
         if include_g:
-            penalties, bounds = interface.get_all_penalties(nlp, nlp.g, get_bounds=True)
+            penalties, bounds = interface.get_all_penalties(
+                nlp,
+                nlp.g,
+                get_bounds=True,
+                post_shake_registry=post_shake_registry,
+                registry_kind="constraint",
+                registry_scope="nlp_g",
+                registry_phase=nlp.phase_idx,
+                registry_stage_offset=base_idx,
+            )
             for (node_idx, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
                 all_g_dict[base_idx + node_idx] = vertcat(all_g_dict[base_idx + node_idx], node_penalty)
                 all_g_bounds_dict[base_idx + node_idx].concatenate(node_bounds)
@@ -499,7 +567,7 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
     return all_g, all_g_bounds
 
 
-def generic_dispatch_obj_func(interface) -> CX:
+def generic_dispatch_obj_func(interface, post_shake_registry: PostShakePenaltyRegistry | None = None) -> CX:
     """
     Parse the objective functions of the full ocp to a SQP-friendly one
 
@@ -511,9 +579,25 @@ def generic_dispatch_obj_func(interface) -> CX:
     all_J_dict = {}
 
     all_J_dict[-1] = interface.ocp.cx()
-    for _, node_penalty in interface.get_all_penalties(interface.ocp, interface.ocp.J_internal).items():
+    for _, node_penalty in interface.get_all_penalties(
+        interface.ocp,
+        interface.ocp.J_internal,
+        post_shake_registry=post_shake_registry,
+        registry_kind="objective",
+        registry_scope="ocp_J_internal",
+        registry_phase=None,
+        registry_stage_offset=-1,
+    ).items():
         all_J_dict[-1] = vertcat(all_J_dict[-1], node_penalty)
-    for _, node_penalty in interface.get_all_penalties([], interface.ocp.J).items():
+    for _, node_penalty in interface.get_all_penalties(
+        [],
+        interface.ocp.J,
+        post_shake_registry=post_shake_registry,
+        registry_kind="objective",
+        registry_scope="ocp_J",
+        registry_phase=None,
+        registry_stage_offset=-1,
+    ).items():
         all_J_dict[-1] = vertcat(all_J_dict[-1], node_penalty)
 
     phase_node_counts = 0
@@ -521,9 +605,25 @@ def generic_dispatch_obj_func(interface) -> CX:
         for i in range(nlp.ns + 1):
             all_J_dict[phase_node_counts + i] = interface.ocp.cx()
 
-        for node_idx, node_penalty in interface.get_all_penalties(nlp, nlp.J_internal).items():
+        for node_idx, node_penalty in interface.get_all_penalties(
+            nlp,
+            nlp.J_internal,
+            post_shake_registry=post_shake_registry,
+            registry_kind="objective",
+            registry_scope="nlp_J_internal",
+            registry_phase=nlp.phase_idx,
+            registry_stage_offset=phase_node_counts,
+        ).items():
             all_J_dict[node_idx + phase_node_counts] = vertcat(all_J_dict[node_idx + phase_node_counts], node_penalty)
-        for node_idx, node_penalty in interface.get_all_penalties(nlp, nlp.J).items():
+        for node_idx, node_penalty in interface.get_all_penalties(
+            nlp,
+            nlp.J,
+            post_shake_registry=post_shake_registry,
+            registry_kind="objective",
+            registry_scope="nlp_J",
+            registry_phase=nlp.phase_idx,
+            registry_stage_offset=phase_node_counts,
+        ).items():
             all_J_dict[node_idx + phase_node_counts] = vertcat(all_J_dict[node_idx + phase_node_counts], node_penalty)
 
         phase_node_counts += nlp.ns + 1
@@ -537,7 +637,16 @@ def generic_dispatch_obj_func(interface) -> CX:
 
 
 def generic_get_all_penalties(
-    interface, nlp: NonLinearProgram, penalties, scaled: Bool = True, get_bounds: Bool = False
+    interface,
+    nlp: NonLinearProgram,
+    penalties,
+    scaled: Bool = True,
+    get_bounds: Bool = False,
+    post_shake_registry: PostShakePenaltyRegistry | None = None,
+    registry_kind: str | None = None,
+    registry_scope: str | None = None,
+    registry_phase: int | None = None,
+    registry_stage_offset: int = 0,
 ):
     """
     Parse the penalties of the full ocp to a SQP-friendly one
@@ -573,6 +682,23 @@ def generic_get_all_penalties(
         }
 
     ocp = interface.ocp
+
+    def record_penalty(value, penalty, occurrence: int, node_idx: int):
+        if post_shake_registry is None:
+            return
+        if registry_kind is None or registry_scope is None:
+            raise RuntimeError("A post-shake registry requires penalty provenance metadata.")
+        post_shake_registry.record(
+            value,
+            kind=registry_kind,
+            scope=registry_scope,
+            penalty_name=str(penalty.name),
+            phase=registry_phase,
+            stage=registry_stage_offset + node_idx,
+            occurrence=occurrence,
+            multi_thread=bool(penalty.multi_thread),
+        )
+
     for penalty in penalties:
         if not penalty:
             continue
@@ -653,10 +779,13 @@ def generic_get_all_penalties(
                 for position, node_idx in enumerate(penalty.node_idx):
                     first_row = position * rows_per_node
                     last_row = first_row + rows_per_node
-                    out[node_idx] = vertcat(out[node_idx], penalty_value[first_row:last_row])
+                    contribution = penalty_value[first_row:last_row]
+                    out[node_idx] = vertcat(out[node_idx], contribution)
+                    record_penalty(contribution, penalty, position, node_idx)
                     out_bounds[node_idx].concatenate(penalty.bounds)
             else:
                 out[0] = vertcat(out[0], penalty_value)
+                record_penalty(penalty_value, penalty, 0, 0)
                 if get_bounds:
                     if penalty.bounds is None:
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")
@@ -671,10 +800,9 @@ def generic_get_all_penalties(
 
                 node_idx = penalty.node_idx[idx]
                 penalty_value = sum2(penalty.weighted_function[node_idx](t0, phases_dt, x, u, p, a, d, weight, target))
-                out[node_idx] = vertcat(
-                    out[node_idx],
-                    interface.transform_penalty_value(penalty, nlp, penalty_value),
-                )
+                contribution = interface.transform_penalty_value(penalty, nlp, penalty_value)
+                out[node_idx] = vertcat(out[node_idx], contribution)
+                record_penalty(contribution, penalty, idx, node_idx)
                 if get_bounds:
                     if penalty.bounds is None:
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")

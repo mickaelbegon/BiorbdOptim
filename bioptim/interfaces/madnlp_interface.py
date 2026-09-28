@@ -43,5 +43,5 @@ class MadnlpInterface(SolverInterface):
     def dispatch_obj_func(self):
         return generic_dispatch_obj_func(self)
 
-    def get_all_penalties(self, nlp: NonLinearProgram, penalties, get_bounds: bool = False):
-        return generic_get_all_penalties(self, nlp, penalties, scaled=True, get_bounds=get_bounds)
+    def get_all_penalties(self, nlp: NonLinearProgram, penalties, get_bounds: bool = False, **kwargs):
+        return generic_get_all_penalties(self, nlp, penalties, scaled=True, get_bounds=get_bounds, **kwargs)
