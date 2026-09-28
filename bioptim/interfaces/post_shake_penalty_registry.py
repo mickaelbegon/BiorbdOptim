@@ -109,7 +109,13 @@ class PostShakePenaltyRegistry:
             jac = jacobian(expression, v)
             active_columns = tuple(sorted(set(int(column) for column in jac.sparsity().get_col())))
             local_x = v.__class__.sym("post_shake_x", len(active_columns), 1)
+            identifier = f"post_shake_{len(self.terms)}"
             local_expression = self._localize(expression, v, active_columns, local_x)
+            # Do not expand here: materializing every term of a large NLP must
+            # stay diagnostic and bounded. A consumer that selects a repeated
+            # candidate for code generation should expand that *one* local
+            # function before generating C; this removes the zero-filled MX
+            # embedding introduced by the full-vector substitution.
             local_jacobian = jacobian(local_expression, local_x)
             multipliers = v.__class__.sym("post_shake_lambda", expression.shape[0], 1)
             local_hessian, _ = hessian(sum1(multipliers * local_expression), local_x)
@@ -123,7 +129,6 @@ class PostShakePenaltyRegistry:
                     **{**metadata.__dict__, "g_row_start": row_start, "g_row_stop": row_stop}
                 )
 
-            identifier = f"post_shake_{len(self.terms)}"
             self.terms.append(
                 PostShakePenaltyTerm(
                     metadata=term_metadata,

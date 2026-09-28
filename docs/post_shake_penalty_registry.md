@@ -59,6 +59,11 @@ contract needs a solver-specific sparse scatter implementation; providing one
 inside this prototype would change the canonical solver path and make the
 equivalence audit harder to trust.
 
+Before C generation, expand the selected *local* function.  The exact
+full-vector substitution used to localize MX expressions contains a
+zero-filled global embedding; expanding only the selected kernel removes that
+embedding without paying the cost for every registry entry.
+
 ## Expected benefit and limitations
 
 The benefit comes from amortizing code generation and crossing the Python/C
