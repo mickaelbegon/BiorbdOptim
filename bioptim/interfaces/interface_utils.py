@@ -1,7 +1,7 @@
 import platform
 from time import perf_counter
 
-from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX, MX, DM, reshape, jacobian
+from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX, MX, DM, reshape, jacobian, substitute
 import numpy as np
 
 from .solver_interface import SolverInterface
@@ -418,6 +418,22 @@ def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayT
     return penalty(vertcat(*dt, v[len(dt) :]))
 
 
+def _normalize_pre_shake_thread_map_fragment(
+    ocp, expression: CX, v: CX, v_bounds: DoubleNpArrayTuple
+) -> CX:
+    """Apply ``shake``'s phase-duration substitution without a temporary Function.
+
+    The canonical aggregate is still shaken through
+    :func:`_shake_penalties_tree`. This lighter, algebraically equivalent
+    path is only for opt-in fragments which were captured before
+    ``Function.map``; constructing a one-output Function per stage otherwise
+    dominates registry preparation time.
+    """
+
+    dt = [v_bounds[0][i] if v_bounds[0][i] == v_bounds[1][i] else v[i] for i in range(ocp.n_phases)]
+    return substitute(expression, v, vertcat(*dt, v[len(dt) :]))
+
+
 def build_post_shake_penalty_registry(interface: SolverInterface, expand: Bool = False) -> PostShakePenaltyRegistry:
     """Return an opt-in, exact registry of canonical post-shake NLP terms.
 
@@ -440,6 +456,7 @@ def build_post_shake_penalty_registry(interface: SolverInterface, expand: Bool =
     registry.materialize(
         v,
         lambda expression: _shake_penalties_tree(interface.ocp, expression, v, v_bounds, expand),
+        lambda expression: _normalize_pre_shake_thread_map_fragment(interface.ocp, expression, v, v_bounds),
     )
     return registry
 
@@ -789,13 +806,58 @@ def generic_get_all_penalties(
                 # The solver still receives one aggregate ThreadMap vector.
                 # Registry-only fragments make each stage addressable for a
                 # compiled/map exact derivative evaluator and later scatter.
-                if post_shake_registry is not None and len(penalty.node_idx) > 1:
+                # Fragments currently model canonical constraint rows. An
+                # objective parent has no ``g`` interval to scatter into, so
+                # leave it as its existing aggregate term until an objective
+                # packet contract is introduced separately.
+                if (
+                    post_shake_registry is not None
+                    and registry_kind == "constraint"
+                    and len(penalty.node_idx) > 1
+                ):
                     rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
                     if not remainder:
                         for position, node_idx in enumerate(penalty.node_idx):
                             first_row = position * rows_per_node
-                            post_shake_registry.record_thread_map_fragment(
-                                penalty_value[first_row : first_row + rows_per_node],
+                            # ``weighted_function`` is a CasADi Function.map.
+                            # Re-invoke its original scalar function with the
+                            # stage column before that map is aggregated. This
+                            # keeps the normal solver graph unchanged while
+                            # giving the opt-in registry a local graph that is
+                            # not reconstructed by slicing the post-map MX
+                            # expression after ``shake``.
+                            stage_value = sum2(
+                                reshape(
+                                    penalty.weighted_function_non_threaded[0](
+                                        t0[:, position],
+                                        phases_dt,
+                                        x[:, position],
+                                        u[:, position],
+                                        p,
+                                        a[:, position],
+                                        # A penalty without numerical time
+                                        # series is represented by an empty
+                                        # 0-column CasADi matrix after the
+                                        # aggregate ``horzcat``.  Preserve
+                                        # that empty argument instead of
+                                        # trying to slice a non-existent
+                                        # stage column.
+                                        d[:, position] if d is not None and d.shape[1] else d,
+                                        weight[:, position],
+                                        target[:, position],
+                                    ),
+                                    -1,
+                                    1,
+                                )
+                            )
+                            stage_value = interface.transform_penalty_value(penalty, nlp, stage_value)
+                            if stage_value.shape[0] != rows_per_node:
+                                raise RuntimeError(
+                                    f"Cannot capture pre-map fragment for {penalty.name}: expected "
+                                    f"{rows_per_node} rows, got {stage_value.shape[0]}."
+                                )
+                            post_shake_registry.record_pre_shake_thread_map_fragment(
+                                stage_value,
                                 parent_term_index=parent_term_index,
                                 parent_row_offset=first_row,
                                 kind="thread_map_fragment",

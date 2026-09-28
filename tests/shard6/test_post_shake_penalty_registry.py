@@ -115,3 +115,52 @@ def test_thread_map_fragments_resolve_to_slices_of_their_aggregate_parent_rows()
     assert (second.metadata.g_row_start, second.metadata.g_row_stop) == (1, 2)
     np.testing.assert_allclose(first.value(DM([3])), [[9]])
     np.testing.assert_allclose(second.value(DM([5])), [[25]])
+
+
+def test_pre_shake_thread_map_fragment_uses_its_original_stage_graph_and_canonical_parent_rows():
+    """A pre-map stage graph need not be a slice of the aggregate MX graph."""
+
+    v = MX.sym("v", 2, 1)
+    registry = PostShakePenaltyRegistry()
+    parent = registry.record(
+        vertcat(v[0] ** 2, v[1] ** 2),
+        kind="constraint",
+        scope="nlp_g",
+        penalty_name="mapped",
+        phase=0,
+        stage=0,
+        occurrence=0,
+        multi_thread=True,
+    )
+    # Deliberately equivalent but structurally independent stage graphs.
+    registry.record_pre_shake_thread_map_fragment(
+        (v[0] + 0) ** 2,
+        parent_term_index=parent,
+        parent_row_offset=0,
+        kind="thread_map_fragment",
+        scope="nlp_g",
+        penalty_name="mapped",
+        phase=0,
+        stage=0,
+        occurrence=0,
+        multi_thread=True,
+    )
+    registry.record_pre_shake_thread_map_fragment(
+        (v[1] + 0) ** 2,
+        parent_term_index=parent,
+        parent_row_offset=1,
+        kind="thread_map_fragment",
+        scope="nlp_g",
+        penalty_name="mapped",
+        phase=0,
+        stage=1,
+        occurrence=1,
+        multi_thread=True,
+    )
+    parent_term, first, second = registry.materialize(v, lambda expression: expression)
+    assert (parent_term.metadata.g_row_start, parent_term.metadata.g_row_stop) == (0, 2)
+    assert (first.metadata.g_row_start, first.metadata.g_row_stop) == (0, 1)
+    assert (second.metadata.g_row_start, second.metadata.g_row_stop) == (1, 2)
+    assert first.metadata.pre_shake_thread_map_fragment is True
+    np.testing.assert_allclose(first.value(DM([3])), [[9]])
+    np.testing.assert_allclose(second.value(DM([5])), [[25]])

@@ -1,7 +1,7 @@
 import numpy as np
 import numpy.testing as npt
 import pytest
-from casadi import Function, DM
+from casadi import Function, DM, hessian, jacobian, sum1
 
 from bioptim import OdeSolver, OrderingStrategy
 from bioptim.examples.toy_examples.feature_examples import example_variable_scaling
@@ -91,6 +91,55 @@ def test_post_shake_penalty_registry_uses_final_canonical_constraint_rows():
         assert term.hessian_sparsity.size1() == len(term.decision_indices)
 
     npt.assert_allclose(rebuilt_g, g_at_initial)
+
+
+def test_pre_shake_thread_map_fragments_use_scalar_stage_graphs_and_exact_canonical_rows():
+    """Mapped collocation continuity is captured before map aggregation."""
+
+    ocp = example_variable_scaling.prepare_ocp(
+        biorbd_model_path=TestUtils.bioptim_folder() + "/examples/models/pendulum.bioMod",
+        final_time=1,
+        n_shooting=3,
+        ode_solver=OdeSolver.COLLOCATION(polynomial_degree=3),
+        use_sx=False,
+        n_threads=2,
+        ordering_strategy=OrderingStrategy.TIME_MAJOR,
+    )
+    interface = IpoptInterface(ocp)
+    registry = interface.build_post_shake_penalty_registry()
+    fragments = [term for term in registry.terms if term.metadata.pre_shake_thread_map_fragment]
+
+    assert len(fragments) == 3
+    assert all(term.metadata.penalty_name == "STATE_CONTINUITY" for term in fragments)
+    assert [(term.metadata.g_row_start, term.metadata.g_row_stop) for term in fragments] == [
+        (0, 16),
+        (16, 32),
+        (32, 48),
+    ]
+
+    g, _ = interface.dispatch_bounds()
+    shaked_g = interface_utils._shake_penalties_tree(
+        ocp, g, ocp.variables_vector, ocp.bounds_vectors, False
+    )
+    g_at_initial = np.asarray(Function("pre_map_g", [ocp.variables_vector], [shaked_g])(ocp.init_vector)).reshape(-1)
+    values = np.asarray(ocp.init_vector).reshape(-1)
+    for term in fragments:
+        local_x = DM(values[list(term.decision_indices)])
+        start, stop = term.metadata.g_row_start, term.metadata.g_row_stop
+        npt.assert_allclose(np.asarray(term.value(local_x)).reshape(-1), g_at_initial[start:stop])
+        global_jacobian = np.asarray(
+            Function("pre_map_jac", [ocp.variables_vector], [jacobian(shaked_g[start:stop], ocp.variables_vector)])(
+                ocp.init_vector
+            )
+        )
+        local_columns = list(term.decision_indices)
+        npt.assert_allclose(np.asarray(term.jacobian(local_x)), global_jacobian[:, local_columns])
+        global_hessian, _ = hessian(sum1(shaked_g[start:stop]), ocp.variables_vector)
+        global_hessian_at_initial = np.asarray(
+            Function("pre_map_hess", [ocp.variables_vector], [global_hessian])(ocp.init_vector)
+        )
+        local_hessian = np.asarray(term.lagrangian_hessian(local_x, DM.ones(stop - start, 1)))
+        npt.assert_allclose(local_hessian, global_hessian_at_initial[np.ix_(local_columns, local_columns)])
 
 
 @pytest.mark.parametrize("use_sx", [True, False])

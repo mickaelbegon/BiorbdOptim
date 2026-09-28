@@ -33,6 +33,7 @@ class PostShakePenaltyMetadata:
     g_row_start: int | None = None
     g_row_stop: int | None = None
     thread_map_fragment: bool = False
+    pre_shake_thread_map_fragment: bool = False
     parent_term_index: int | None = None
     parent_row_offset: int | None = None
 
@@ -99,7 +100,33 @@ class PostShakePenaltyRegistry:
             **metadata,
         )
 
-    def materialize(self, v: CX, shake: Callable[[CX], CX]) -> list[PostShakePenaltyTerm]:
+    def record_pre_shake_thread_map_fragment(
+        self, expression: CX, *, parent_term_index: int, parent_row_offset: int, **metadata: Any
+    ) -> int:
+        """Record the scalar stage graph used *before* ``Function.map``.
+
+        Unlike :meth:`record_thread_map_fragment`, ``expression`` is not a
+        slice reconstructed from the aggregate mapped graph.  It is the
+        original non-threaded penalty invocation for one stage.  The parent
+        still owns the canonical NLP rows; this opt-in record only supplies a
+        cheaper exact local derivative graph for a later packet evaluator.
+        """
+
+        return self.record(
+            expression,
+            thread_map_fragment=True,
+            pre_shake_thread_map_fragment=True,
+            parent_term_index=parent_term_index,
+            parent_row_offset=parent_row_offset,
+            **metadata,
+        )
+
+    def materialize(
+        self,
+        v: CX,
+        shake: Callable[[CX], CX],
+        pre_shake_fragment: Callable[[CX], CX] | None = None,
+    ) -> list[PostShakePenaltyTerm]:
         """Apply ``shake`` and create exact local value/Jacobian/Hessian views.
 
         Parameters
@@ -109,6 +136,10 @@ class PostShakePenaltyRegistry:
         shake
             The same transformation used by the solver path.  Passing it in
             keeps this module independent from :mod:`interface_utils`.
+        pre_shake_fragment
+            Optional exact normalization for a fragment captured before
+            ``Function.map``. This avoids rebuilding a one-output CasADi
+            ``Function`` for every mapped stage.
         """
 
         self.terms = []
@@ -132,7 +163,7 @@ class PostShakePenaltyRegistry:
             # not shake the complete parent graph once per stage: reuse its
             # already-shaken canonical expression, then localize just the
             # slice. This is essential for bounded registry construction.
-            if metadata.thread_map_fragment:
+            if metadata.thread_map_fragment and not metadata.pre_shake_thread_map_fragment:
                 if metadata.parent_term_index is None or metadata.parent_row_offset is None:
                     raise RuntimeError("ThreadMap fragment is missing parent provenance.")
                 parent_expression = shaken_expressions.get(metadata.parent_term_index)
@@ -142,7 +173,11 @@ class PostShakePenaltyRegistry:
                     metadata.parent_row_offset : metadata.parent_row_offset + pending.expression.shape[0]
                 ]
             else:
-                expression = shake(pending.expression)
+                expression = (
+                    pre_shake_fragment(pending.expression)
+                    if metadata.pre_shake_thread_map_fragment and pre_shake_fragment is not None
+                    else shake(pending.expression)
+                )
             shaken_expressions[pending_index] = expression
             jac = jacobian(expression, v)
             active_columns = tuple(sorted(set(int(column) for column in jac.sparsity().get_col())))
