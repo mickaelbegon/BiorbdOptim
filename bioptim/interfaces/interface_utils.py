@@ -8,6 +8,7 @@ from .solver_interface import SolverInterface
 from .c_compile_cache import cached_nlpsol, cached_nlpsol_callbacks
 from .function_transform import transformed_nlpsol
 from .post_shake_penalty_registry import PostShakePenaltyRegistry
+from .compiled_thread_map_external import compile_external_with_exact_derivatives
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -719,6 +720,22 @@ def generic_get_all_penalties(
             multi_thread=bool(penalty.multi_thread),
         )
 
+    def compiled_scalar_thread_map(penalty):
+        """Return an opt-in exact C scalar kernel, otherwise ``None``."""
+
+        if (
+            str(penalty.name) not in interface.compiled_thread_map_external_penalties
+            or interface.compiled_thread_map_external_cache_dir is None
+        ):
+            return None
+        source = penalty.weighted_function_non_threaded[0]
+        key = id(source)
+        if key not in interface._compiled_thread_map_external_functions:
+            interface._compiled_thread_map_external_functions[key] = compile_external_with_exact_derivatives(
+                source, interface.compiled_thread_map_external_cache_dir
+            )
+        return interface._compiled_thread_map_external_functions[key]
+
     for penalty in penalties:
         if not penalty:
             continue
@@ -767,10 +784,19 @@ def generic_get_all_penalties(
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")
                     bound_tp.concatenate(penalty.bounds)
 
-            # We can call penalty.weighted_function[0] since multi-thread declares all the node at [0]
+            # We can call penalty.weighted_function[0] since multi-thread declares all the node at [0].
+            # The experimental external path deliberately compiles the scalar
+            # source and maps it again, preserving the normal aggregate graph
+            # shape while giving global MX AD an exact C call at every stage.
+            scalar_external = compiled_scalar_thread_map(penalty)
+            mapped_weighted_function = (
+                scalar_external.map(len(penalty.node_idx), "thread", interface.ocp.n_threads)
+                if scalar_external is not None
+                else penalty.weighted_function[0]
+            )
             penalty_value = sum2(
                 reshape(
-                    penalty.weighted_function[0](t0, phases_dt, x, u, p, a, d, weight, target),
+                    mapped_weighted_function(t0, phases_dt, x, u, p, a, d, weight, target),
                     -1,
                     1,
                 )

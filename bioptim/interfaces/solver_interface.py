@@ -61,6 +61,13 @@ class SolverInterface:
         self._initial_nlp_constraint_audit_function = None
         self._next_initial_guess_override = None
 
+        # Experimental and off by default.  It only replaces selected scalar
+        # functions below a Function.map by exact C externals; the global NLP
+        # stays MX and is never compiled as a whole.
+        self.compiled_thread_map_external_penalties = frozenset()
+        self.compiled_thread_map_external_cache_dir = None
+        self._compiled_thread_map_external_functions = {}
+
     def set_next_initial_guess_override(self, values) -> None:
         """Submit an exact, scaled decision vector to the next solve only."""
 
@@ -88,6 +95,25 @@ class SolverInterface:
         """Enable exact pre-solve evaluations of the submitted ``g(x0)``."""
 
         self.initial_nlp_audit_enabled = enabled
+
+    def enable_compiled_thread_map_external(self, penalty_names, cache_dir) -> None:
+        """Opt in to exact C kernels below selected repeated ``ThreadMap`` penalties.
+
+        This is intentionally an advanced construction-time option. Call it
+        before building/solving the NLP.  The default is the unchanged native
+        CasADi map path.
+        """
+
+        if isinstance(penalty_names, str):
+            penalty_names = (penalty_names,)
+        names = frozenset(str(name) for name in penalty_names)
+        if not names:
+            raise ValueError("penalty_names must not be empty")
+        if cache_dir is None:
+            raise ValueError("cache_dir is required for compiled ThreadMap externals")
+        self.compiled_thread_map_external_penalties = names
+        self.compiled_thread_map_external_cache_dir = cache_dir
+        self._compiled_thread_map_external_functions.clear()
 
     def build_post_shake_penalty_registry(self, expand: Bool = False, materialize: Bool = True):
         """Describe exact canonical penalty terms without changing the NLP.

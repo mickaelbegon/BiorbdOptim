@@ -1,7 +1,9 @@
 import numpy as np
+import casadi as ca
 from casadi import DM, MX, vertcat
 
 from bioptim.interfaces.post_shake_penalty_registry import PostShakePenaltyRegistry
+from bioptim.interfaces.compiled_thread_map_external import compile_external_with_exact_derivatives
 
 
 def test_post_shake_registry_localizes_exact_value_jacobian_hessian_and_global_g_rows():
@@ -200,3 +202,26 @@ def test_pre_shake_thread_map_packet_keeps_one_exact_kernel_and_stage_scatter_pl
     assert [(item.g_row_start, item.g_row_stop) for item in packet.metadata] == [(0, 1), (1, 2)]
     np.testing.assert_allclose(packet.value(DM([3])), [[9]])
     np.testing.assert_allclose(packet.lagrangian_hessian(DM([3]), DM([1])), [[2]])
+
+
+def test_compiled_thread_map_external_preserves_exact_jacobian_and_hessian(tmp_path):
+    """The C primal alone is insufficient: this verifies its exact AD helpers."""
+
+    x = ca.MX.sym("x", 2)
+    y = ca.MX.sym("y")
+    native = ca.Function("thread_map_stage", [x, y], [ca.vertcat(x[0] ** 2 + y, ca.sin(x[1]) * y)])
+    compiled = compile_external_with_exact_derivatives(native, tmp_path)
+    decision = ca.vertcat(x, y)
+    multipliers = ca.MX.sym("lambda", 2)
+    native_jacobian = ca.Function("native_jacobian", [x, y], [ca.jacobian(native(x, y), decision)])
+    compiled_jacobian = ca.Function("compiled_jacobian", [x, y], [ca.jacobian(compiled(x, y), decision)])
+    native_hessian = ca.Function(
+        "native_hessian", [x, y, multipliers], [ca.hessian(ca.dot(multipliers, native(x, y)), decision)[0]]
+    )
+    compiled_hessian = ca.Function(
+        "compiled_hessian", [x, y, multipliers], [ca.hessian(ca.dot(multipliers, compiled(x, y)), decision)[0]]
+    )
+    args = (ca.DM([2.0, 3.0]), ca.DM([4.0]))
+    np.testing.assert_allclose(compiled(*args), native(*args), atol=0, rtol=0)
+    np.testing.assert_allclose(compiled_jacobian(*args), native_jacobian(*args), atol=0, rtol=0)
+    np.testing.assert_allclose(compiled_hessian(*args, ca.DM([1.0, 2.0])), native_hessian(*args, ca.DM([1.0, 2.0])), atol=0, rtol=0)
