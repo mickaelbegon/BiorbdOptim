@@ -138,7 +138,9 @@ def _phase(command: list[str], output: Path, external_cache: Path, repeats: int,
     external_build_s = time.perf_counter() - tic
     x = ca.DM.zeros(*native.size_in(0))
     g = native.get_function("nlp_g")
-    lam_g = ca.DM.ones(g.size_out(0), 1)
+    # CasADi returns the complete ``(rows, columns)`` shape here. Passing it
+    # as the first argument and appending ``1`` makes ``DM.ones`` ambiguous.
+    lam_g = ca.DM.ones(g.size_out(0))
     report = {
         "cache_libraries_before": cache_before,
         "cache_libraries_after": sorted(path.name for path in external_cache.glob("*.so")),
