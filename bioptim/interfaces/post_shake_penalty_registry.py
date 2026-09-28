@@ -57,6 +57,26 @@ class PostShakePenaltyTerm:
 
 
 @dataclass
+class PreShakeThreadMapPacket:
+    """One repeated pre-map exact kernel plus its canonical scatter plan.
+
+    Unlike :class:`PostShakePenaltyTerm`, a packet does not localize every
+    stage into an independent MX graph.  It retains one local representative
+    and the per-stage decision columns / canonical constraint rows required to
+    map then scatter it.  This makes it appropriate for assessing repeated
+    collocation terms without multiplying the FHO construction memory.
+    """
+
+    metadata: tuple[PostShakePenaltyMetadata, ...]
+    decision_indices: tuple[tuple[int, ...], ...]
+    jacobian_sparsity: Any
+    hessian_sparsity: Any
+    value: Function
+    jacobian: Function
+    lagrangian_hessian: Function
+
+
+@dataclass
 class _PendingTerm:
     metadata: PostShakePenaltyMetadata
     expression: CX
@@ -233,6 +253,92 @@ class PostShakePenaltyRegistry:
                 raise RuntimeError("ThreadMap fragment exceeds parent rows.")
             self.terms[index].metadata = replace(metadata, g_row_start=row_start, g_row_stop=row_stop)
         return self.terms
+
+    def build_pre_shake_thread_map_packet(
+        self, v: CX, pre_shake_fragment: Callable[[CX], CX], penalty_name: str
+    ) -> PreShakeThreadMapPacket:
+        """Build a compact exact packet for one repeated ``ThreadMap`` family.
+
+        The normal :meth:`materialize` method is intentionally exhaustive and
+        creates one localized derivative graph per term.  That is useful for
+        diagnostics but too costly for a large repeated STATE_CONTINUITY
+        family.  Here canonical ``g`` rows are resolved from dispatch order,
+        while only one pre-map scalar stage graph is localized.  Every stage
+        still has its own active global decision columns, so callers can map
+        the representative and scatter it without ambiguity.
+        """
+
+        rows_per_stage: dict[int, int] = {}
+        for pending in self._pending:
+            metadata = pending.metadata
+            if metadata.kind == "constraint" and not metadata.thread_map_fragment:
+                rows_per_stage[metadata.stage] = rows_per_stage.get(metadata.stage, 0) + pending.expression.shape[0]
+        stage_base: dict[int, int] = {}
+        next_row = 0
+        for stage in sorted(rows_per_stage):
+            stage_base[stage] = next_row
+            next_row += rows_per_stage[stage]
+        parent_rows: dict[int, tuple[int, int]] = {}
+        constraint_offsets: dict[int, int] = {}
+        for index, pending in enumerate(self._pending):
+            metadata = pending.metadata
+            if metadata.kind != "constraint" or metadata.thread_map_fragment:
+                continue
+            row_start = stage_base[metadata.stage] + constraint_offsets.get(metadata.stage, 0)
+            row_stop = row_start + pending.expression.shape[0]
+            constraint_offsets[metadata.stage] = row_stop - stage_base[metadata.stage]
+            parent_rows[index] = (row_start, row_stop)
+
+        selected = [
+            pending
+            for pending in self._pending
+            if pending.metadata.pre_shake_thread_map_fragment and pending.metadata.penalty_name == penalty_name
+        ]
+        if not selected:
+            raise ValueError(f"No pre-shake ThreadMap fragment named {penalty_name!r}.")
+        packet_metadata: list[PostShakePenaltyMetadata] = []
+        packet_indices: list[tuple[int, ...]] = []
+        representative_expression = None
+        representative_indices: tuple[int, ...] | None = None
+        representative_jacobian = None
+        for pending in selected:
+            metadata = pending.metadata
+            if metadata.parent_term_index is None or metadata.parent_row_offset is None:
+                raise RuntimeError("Pre-shake ThreadMap fragment is missing parent provenance.")
+            parent_start, parent_stop = parent_rows[metadata.parent_term_index]
+            row_start = parent_start + metadata.parent_row_offset
+            row_stop = row_start + pending.expression.shape[0]
+            if row_stop > parent_stop:
+                raise RuntimeError("Pre-shake ThreadMap fragment exceeds parent rows.")
+            expression = pre_shake_fragment(pending.expression)
+            jac = jacobian(expression, v)
+            active_columns = tuple(sorted(set(int(column) for column in jac.sparsity().get_col())))
+            packet_metadata.append(replace(metadata, g_row_start=row_start, g_row_stop=row_stop))
+            packet_indices.append(active_columns)
+            if representative_expression is None:
+                representative_expression = expression
+                representative_indices = active_columns
+                representative_jacobian = jac
+            elif active_columns.__len__() != representative_indices.__len__() or expression.shape != representative_expression.shape:
+                raise ValueError(
+                    f"ThreadMap family {penalty_name!r} is not structurally homogeneous; split it before mapping."
+                )
+
+        local_x = v.__class__.sym("post_shake_packet_x", len(representative_indices), 1)
+        local_expression = self._localize(representative_expression, v, representative_indices, local_x)
+        local_jacobian = jacobian(local_expression, local_x)
+        multipliers = v.__class__.sym("post_shake_packet_lambda", local_expression.shape[0], 1)
+        local_hessian, _ = hessian(sum1(multipliers * local_expression), local_x)
+        identifier = f"post_shake_packet_{penalty_name.lower()}"
+        return PreShakeThreadMapPacket(
+            metadata=tuple(packet_metadata),
+            decision_indices=tuple(packet_indices),
+            jacobian_sparsity=local_jacobian.sparsity(),
+            hessian_sparsity=local_hessian.sparsity(),
+            value=Function(f"{identifier}_value", [local_x], [local_expression]),
+            jacobian=Function(f"{identifier}_jacobian", [local_x], [local_jacobian]),
+            lagrangian_hessian=Function(f"{identifier}_hessian", [local_x, multipliers], [local_hessian]),
+        )
 
     @staticmethod
     def _localize(expression: CX, v: CX, indices: tuple[int, ...], local_x: CX) -> CX:

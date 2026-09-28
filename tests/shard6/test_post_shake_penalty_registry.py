@@ -164,3 +164,39 @@ def test_pre_shake_thread_map_fragment_uses_its_original_stage_graph_and_canonic
     assert first.metadata.pre_shake_thread_map_fragment is True
     np.testing.assert_allclose(first.value(DM([3])), [[9]])
     np.testing.assert_allclose(second.value(DM([5])), [[25]])
+
+
+def test_pre_shake_thread_map_packet_keeps_one_exact_kernel_and_stage_scatter_plan():
+    """A packet avoids materializing one MX Hessian graph per mapped stage."""
+
+    v = MX.sym("v", 2, 1)
+    registry = PostShakePenaltyRegistry()
+    parent = registry.record(
+        vertcat(v[0] ** 2, v[1] ** 2),
+        kind="constraint",
+        scope="nlp_g",
+        penalty_name="STATE_CONTINUITY",
+        phase=0,
+        stage=0,
+        occurrence=0,
+        multi_thread=True,
+    )
+    for occurrence, column in enumerate((0, 1)):
+        registry.record_pre_shake_thread_map_fragment(
+            v[column] ** 2,
+            parent_term_index=parent,
+            parent_row_offset=occurrence,
+            kind="thread_map_fragment",
+            scope="nlp_g",
+            penalty_name="STATE_CONTINUITY",
+            phase=0,
+            stage=occurrence,
+            occurrence=occurrence,
+            multi_thread=True,
+        )
+
+    packet = registry.build_pre_shake_thread_map_packet(v, lambda expression: expression, "STATE_CONTINUITY")
+    assert packet.decision_indices == ((0,), (1,))
+    assert [(item.g_row_start, item.g_row_stop) for item in packet.metadata] == [(0, 1), (1, 2)]
+    np.testing.assert_allclose(packet.value(DM([3])), [[9]])
+    np.testing.assert_allclose(packet.lagrangian_hessian(DM([3]), DM([1])), [[2]])

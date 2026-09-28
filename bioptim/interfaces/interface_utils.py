@@ -434,7 +434,9 @@ def _normalize_pre_shake_thread_map_fragment(
     return substitute(expression, v, vertcat(*dt, v[len(dt) :]))
 
 
-def build_post_shake_penalty_registry(interface: SolverInterface, expand: Bool = False) -> PostShakePenaltyRegistry:
+def build_post_shake_penalty_registry(
+    interface: SolverInterface, expand: Bool = False, materialize: Bool = True
+) -> PostShakePenaltyRegistry:
     """Return an opt-in, exact registry of canonical post-shake NLP terms.
 
     The normal solve path remains unchanged.  This helper mirrors its generic
@@ -453,11 +455,12 @@ def build_post_shake_penalty_registry(interface: SolverInterface, expand: Bool =
         include_g_internal=True,
         post_shake_registry=registry,
     )
-    registry.materialize(
-        v,
-        lambda expression: _shake_penalties_tree(interface.ocp, expression, v, v_bounds, expand),
-        lambda expression: _normalize_pre_shake_thread_map_fragment(interface.ocp, expression, v, v_bounds),
-    )
+    if materialize:
+        registry.materialize(
+            v,
+            lambda expression: _shake_penalties_tree(interface.ocp, expression, v, v_bounds, expand),
+            lambda expression: _normalize_pre_shake_thread_map_fragment(interface.ocp, expression, v, v_bounds),
+        )
     return registry
 
 

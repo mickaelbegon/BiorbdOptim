@@ -89,7 +89,7 @@ class SolverInterface:
 
         self.initial_nlp_audit_enabled = enabled
 
-    def build_post_shake_penalty_registry(self, expand: Bool = False):
+    def build_post_shake_penalty_registry(self, expand: Bool = False, materialize: Bool = True):
         """Describe exact canonical penalty terms without changing the NLP.
 
         The returned registry is intended for advanced code-generation and
@@ -99,7 +99,7 @@ class SolverInterface:
 
         from .interface_utils import build_post_shake_penalty_registry
 
-        return build_post_shake_penalty_registry(self, expand=expand)
+        return build_post_shake_penalty_registry(self, expand=expand, materialize=materialize)
 
     def configure(self, **options):
         """
