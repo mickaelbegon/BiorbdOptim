@@ -43,3 +43,22 @@ ne remplace pas encore le registre pré-`shake`. Il vérifie seulement que
 l'option la plus directe — `External` exact sous le `map` — préserve les
 dérivées globales. Une intégration production exigera un cache signé/verrouillé
 et des mesures à chaud qui dépassent le coût d'appel ABI.
+
+## Verdict FHO3 du 28 septembre
+
+Le test complet a rejeté cette voie directe. Le graphe se construit et les
+sorties objective/contraintes restent compatibles, mais le `External` avec
+Jacobienne personnalisée perd le patron de Hessienne de CasADi :
+
+| callback | natif | External | résultat |
+|---|---:|---:|---|
+| `nlp_hess_l` nnz | 49 077 | 1 156 389 | patron densifié |
+| `nlp_hess_l` | 0,164 s | 1,466 s | ×0,112 |
+| construction NLP | 5,86 s | 211,69 s | non amortissable ici |
+
+La compilation/assemblage a culminé à 3,9 Gio. Les évaluations `g` et `J`
+ont été faites au zéro symbolique et contenaient des `NaN` issus du modèle ;
+elles ne constituent donc pas un certificat numérique. Le gate FHO3 rejette
+désormais explicitement toute erreur non finie. La conclusion est **NO-GO pour
+l'External pré-map monolithique** ; la cible reste `H_other` natif plus une
+continuité C assemblée directement dans le patron sparse original.

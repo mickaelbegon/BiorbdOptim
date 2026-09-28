@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -33,10 +34,12 @@ def fho3_gate(report: dict, *, tolerance: float, minimum_hessian_speedup: float)
             continue
         if row.get("native_nnz") != row.get("external_nnz"):
             reasons.append(f"{name} sparsity differs")
-        if row.get("max_abs_error", float("inf")) > tolerance:
+        error = row.get("max_abs_error", float("inf"))
+        if not isinstance(error, (int, float)) or not math.isfinite(error) or error > tolerance:
             reasons.append(f"{name} error exceeds {tolerance:g}")
     hessian = functions.get("nlp_hess_l", {})
-    if hessian.get("speedup", 0.0) < minimum_hessian_speedup:
+    speedup = hessian.get("speedup", 0.0)
+    if not isinstance(speedup, (int, float)) or not math.isfinite(speedup) or speedup < minimum_hessian_speedup:
         reasons.append(
             f"nlp_hess_l speedup {hessian.get('speedup')} is below {minimum_hessian_speedup:g}"
         )

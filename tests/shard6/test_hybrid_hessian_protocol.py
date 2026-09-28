@@ -28,3 +28,11 @@ def test_fho3_gate_blocks_fho100_on_error_or_regression():
     assert not accepted
     assert any("error" in item for item in reasons)
     assert any("speedup" in item for item in reasons)
+
+
+def test_fho3_gate_blocks_non_finite_callback_audit():
+    report = _report()
+    report["warm"]["functions"]["nlp_g"]["max_abs_error"] = float("nan")
+    accepted, reasons = _MODULE.fho3_gate(report, tolerance=1e-10, minimum_hessian_speedup=1.05)
+    assert not accepted
+    assert any("nlp_g error" in item for item in reasons)
