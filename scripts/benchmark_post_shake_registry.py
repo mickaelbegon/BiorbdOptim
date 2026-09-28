@@ -165,7 +165,7 @@ def main() -> None:
     terms = [
         term
         for term in registry.terms
-        if term.metadata.kind == "constraint"
+        if term.metadata.kind in ("constraint", "thread_map_fragment")
         and term.hessian_sparsity.nnz()
         and len(term.decision_indices) <= args.max_local_x
     ]
@@ -199,9 +199,14 @@ def main() -> None:
         {
             "name": group[0].metadata.penalty_name,
             "scope": group[0].metadata.scope,
+            "thread_map_fragment": group[0].metadata.thread_map_fragment,
             "structural_count": len(group),
             "local_x": len(group[0].decision_indices),
             "local_hessian_nnz": group[0].hessian_sparsity.nnz(),
+            "raw_hessian_entries_covered": len(group) * group[0].hessian_sparsity.nnz(),
+            "raw_hessian_fraction_of_native": (
+                len(group) * group[0].hessian_sparsity.nnz() / max(nlp.sparsity_out(0).nnz(), 1)
+            ),
         }
         for group in sorted(buckets.values(), key=len, reverse=True)[:20]
     ]
@@ -217,6 +222,7 @@ def main() -> None:
             "registry_build_s": registry_time,
             "registry_terms": len(registry.terms),
             "nonlinear_constraint_terms": len(terms),
+            "thread_map_fragment_terms": sum(term.metadata.thread_map_fragment for term in terms),
             "maximum_local_x": args.max_local_x,
             "signature_bucket_count": len(buckets),
             "algebraically_validated_repeated_group_count": len(validated),
@@ -253,6 +259,10 @@ def main() -> None:
             "count": count,
             "local_x": len(representative.decision_indices),
             "local_hessian_nnz": representative.hessian_sparsity.nnz(),
+            "raw_hessian_entries_covered": count * representative.hessian_sparsity.nnz(),
+            "raw_hessian_fraction_of_native": (
+                count * representative.hessian_sparsity.nnz() / max(nlp.sparsity_out(0).nnz(), 1)
+            ),
             "vm_map_median_s": vm_time,
             "compiled_map_median_s": c_time,
             "compile_s": compile_time,

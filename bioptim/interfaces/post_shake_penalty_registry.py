@@ -10,7 +10,7 @@ derivatives.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
 from casadi import Function, MX, SX, hessian, jacobian, substitute, sum1, vertcat
@@ -32,6 +32,9 @@ class PostShakePenaltyMetadata:
     multi_thread: bool
     g_row_start: int | None = None
     g_row_stop: int | None = None
+    thread_map_fragment: bool = False
+    parent_term_index: int | None = None
+    parent_row_offset: int | None = None
 
 
 @dataclass
@@ -70,12 +73,31 @@ class PostShakePenaltyRegistry:
     _pending: list[_PendingTerm] = field(default_factory=list)
     terms: list[PostShakePenaltyTerm] = field(default_factory=list)
 
-    def record(self, expression: CX, **metadata: Any) -> None:
+    def record(self, expression: CX, **metadata: Any) -> int:
         """Record one raw contribution in canonical dispatch order."""
 
         if expression.shape[1] != 1:
             expression = vertcat(expression)
+        index = len(self._pending)
         self._pending.append(_PendingTerm(PostShakePenaltyMetadata(**metadata), expression))
+        return index
+
+    def record_thread_map_fragment(
+        self, expression: CX, *, parent_term_index: int, parent_row_offset: int, **metadata: Any
+    ) -> int:
+        """Record a stage slice of an aggregate ThreadMap constraint.
+
+        The aggregate parent remains the sole canonical contribution.  The
+        fragment receives its final g rows from the parent after shake.
+        """
+
+        return self.record(
+            expression,
+            thread_map_fragment=True,
+            parent_term_index=parent_term_index,
+            parent_row_offset=parent_row_offset,
+            **metadata,
+        )
 
     def materialize(self, v: CX, shake: Callable[[CX], CX]) -> list[PostShakePenaltyTerm]:
         """Apply ``shake`` and create exact local value/Jacobian/Hessian views.
@@ -95,7 +117,7 @@ class PostShakePenaltyRegistry:
         # materializing any individual term.
         rows_per_stage: dict[int, int] = {}
         for pending in self._pending:
-            if pending.metadata.kind == "constraint":
+            if pending.metadata.kind == "constraint" and not pending.metadata.thread_map_fragment:
                 rows_per_stage[pending.metadata.stage] = rows_per_stage.get(pending.metadata.stage, 0) + pending.expression.shape[0]
         stage_base: dict[int, int] = {}
         next_row = 0
@@ -103,9 +125,25 @@ class PostShakePenaltyRegistry:
             stage_base[stage] = next_row
             next_row += rows_per_stage[stage]
         constraint_offsets: dict[int, int] = {}
-        for pending in self._pending:
+        shaken_expressions: dict[int, CX] = {}
+        for pending_index, pending in enumerate(self._pending):
             metadata = pending.metadata
-            expression = shake(pending.expression)
+            # A fragment is a slice of an aggregate ThreadMap expression. Do
+            # not shake the complete parent graph once per stage: reuse its
+            # already-shaken canonical expression, then localize just the
+            # slice. This is essential for bounded registry construction.
+            if metadata.thread_map_fragment:
+                if metadata.parent_term_index is None or metadata.parent_row_offset is None:
+                    raise RuntimeError("ThreadMap fragment is missing parent provenance.")
+                parent_expression = shaken_expressions.get(metadata.parent_term_index)
+                if parent_expression is None:
+                    raise RuntimeError("ThreadMap fragment was recorded before its parent.")
+                expression = parent_expression[
+                    metadata.parent_row_offset : metadata.parent_row_offset + pending.expression.shape[0]
+                ]
+            else:
+                expression = shake(pending.expression)
+            shaken_expressions[pending_index] = expression
             jac = jacobian(expression, v)
             active_columns = tuple(sorted(set(int(column) for column in jac.sparsity().get_col())))
             local_x = v.__class__.sym("post_shake_x", len(active_columns), 1)
@@ -121,7 +159,7 @@ class PostShakePenaltyRegistry:
             local_hessian, _ = hessian(sum1(multipliers * local_expression), local_x)
 
             term_metadata = metadata
-            if metadata.kind == "constraint":
+            if metadata.kind == "constraint" and not metadata.thread_map_fragment:
                 row_start = stage_base[metadata.stage] + constraint_offsets.get(metadata.stage, 0)
                 row_stop = row_start + expression.shape[0]
                 constraint_offsets[metadata.stage] = row_stop - stage_base[metadata.stage]
@@ -142,6 +180,23 @@ class PostShakePenaltyRegistry:
                     ),
                 )
             )
+        # ThreadMap fragments occupy slices of an aggregate parent, rather
+        # than independent canonical rows.  This preserves the solver graph
+        # while exposing the rows required for exact scatter-add assembly.
+        for index, term in enumerate(self.terms):
+            metadata = term.metadata
+            if not metadata.thread_map_fragment:
+                continue
+            if metadata.parent_term_index is None or metadata.parent_row_offset is None:
+                raise RuntimeError("ThreadMap fragment is missing parent provenance.")
+            parent = self.terms[metadata.parent_term_index].metadata
+            if parent.g_row_start is None or parent.g_row_stop is None:
+                raise RuntimeError("ThreadMap fragment parent has no canonical rows.")
+            row_start = parent.g_row_start + metadata.parent_row_offset
+            row_stop = row_start + term.value.size1_out(0)
+            if row_stop > parent.g_row_stop:
+                raise RuntimeError("ThreadMap fragment exceeds parent rows.")
+            self.terms[index].metadata = replace(metadata, g_row_start=row_start, g_row_stop=row_stop)
         return self.terms
 
     @staticmethod

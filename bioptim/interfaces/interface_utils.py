@@ -685,10 +685,10 @@ def generic_get_all_penalties(
 
     def record_penalty(value, penalty, occurrence: int, node_idx: int):
         if post_shake_registry is None:
-            return
+            return None
         if registry_kind is None or registry_scope is None:
             raise RuntimeError("A post-shake registry requires penalty provenance metadata.")
-        post_shake_registry.record(
+        return post_shake_registry.record(
             value,
             kind=registry_kind,
             scope=registry_scope,
@@ -785,7 +785,27 @@ def generic_get_all_penalties(
                     out_bounds[node_idx].concatenate(penalty.bounds)
             else:
                 out[0] = vertcat(out[0], penalty_value)
-                record_penalty(penalty_value, penalty, 0, 0)
+                parent_term_index = record_penalty(penalty_value, penalty, 0, 0)
+                # The solver still receives one aggregate ThreadMap vector.
+                # Registry-only fragments make each stage addressable for a
+                # compiled/map exact derivative evaluator and later scatter.
+                if post_shake_registry is not None and len(penalty.node_idx) > 1:
+                    rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
+                    if not remainder:
+                        for position, node_idx in enumerate(penalty.node_idx):
+                            first_row = position * rows_per_node
+                            post_shake_registry.record_thread_map_fragment(
+                                penalty_value[first_row : first_row + rows_per_node],
+                                parent_term_index=parent_term_index,
+                                parent_row_offset=first_row,
+                                kind="thread_map_fragment",
+                                scope=registry_scope or "unknown",
+                                penalty_name=str(penalty.name),
+                                phase=registry_phase,
+                                stage=registry_stage_offset + node_idx,
+                                occurrence=position,
+                                multi_thread=True,
+                            )
                 if get_bounds:
                     if penalty.bounds is None:
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")
