@@ -18,7 +18,7 @@ def test_soft_contact_static_initial_state():
     model = BiorbdModel(model_path)
     qddot = model.forward_dynamics()(q, qdot, np.zeros(model.nb_tau), [], np.empty((0, 1)))
 
-    npt.assert_allclose(q, np.array([0.0, 0.09331769696432672, 0.0]), atol=1e-10)
+    npt.assert_allclose(q, np.array([0.0, 0.07993531401704818, 0.0]), atol=1e-10)
     npt.assert_allclose(qdot, np.zeros(model.nb_qdot), atol=1e-12)
     npt.assert_allclose(np.asarray(qddot).squeeze(), np.zeros(model.nb_qddot), atol=1e-8)
 
@@ -37,7 +37,7 @@ def test_soft_contact_initial_bounds_are_independent_of_horizon(final_time):
     )
 
     q_bounds = ocp.nlp[0].x_bounds["q"]
-    marker_start = np.array([0.0, 0.0933176954, 0.0])
+    marker_start = np.array([0.0, 0.079935314017, 0.0])
     assert np.all(q_bounds.min[:, 0] <= marker_start)
     assert np.all(marker_start <= q_bounds.max[:, 0])
 
@@ -67,7 +67,7 @@ def test_soft_contact(phase_dynamics):
     f = np.array(sol.cost)
     npt.assert_equal(f.shape, (1, 1))
     if isinstance(ode_solver, OdeSolver.RK8):
-        npt.assert_almost_equal(f[0, 0], 23.679065887950486)
+        npt.assert_almost_equal(f[0, 0], 24.665098506494772)
     else:
         npt.assert_almost_equal(f[0, 0], 41.58259426)
 
@@ -82,13 +82,13 @@ def test_soft_contact(phase_dynamics):
     q, qdot, tau = states["q"], states["qdot"], controls["tau"]
 
     # initial and final position
-    npt.assert_almost_equal(q[:, 0], np.array((0, 0, 0)), decimal=1)
-    npt.assert_almost_equal(q[:, -1], np.array([0.05, 0.0933177, -0.6262446]))
+    npt.assert_almost_equal(q[:, 0], np.array([0.0, 0.079935314, 0.0]))
+    npt.assert_almost_equal(q[:, -1], np.array([0.05, 0.07993531, -0.62625483]))
 
     # initial and final velocities
-    npt.assert_almost_equal(qdot[:, 0], np.array((0, 0, 0)), decimal=4)
-    npt.assert_almost_equal(qdot[:, -1], np.array([2.03004523e-01, -1.74795966e-05, -2.53770131e00]))
+    npt.assert_almost_equal(qdot[:, 0], np.array([9.92595060e-05, -9.91995490e-05, -9.99506689e-05]), decimal=4)
+    npt.assert_almost_equal(qdot[:, -1], np.array([2.02984898e-01, 3.03309818e-06, -2.53758803e00]))
 
     # initial and final controls
-    npt.assert_almost_equal(tau[:, 0], np.array([-0.16347455, 0.02123226, -13.25955361]))
-    npt.assert_almost_equal(tau[:, -1], np.array([0.00862357, -0.00298151, -0.16425701]))
+    npt.assert_almost_equal(tau[:, 0], np.array([0.0142846, 0.01826357, -13.55074681]))
+    npt.assert_almost_equal(tau[:, -1], np.array([0.01106614, 0.00751605, -0.16823393]))

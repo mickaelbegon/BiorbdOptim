@@ -90,7 +90,10 @@ def initial_states_from_static_equilibrium(model):
         [bio_model.forward_dynamics()(q, qdot, tau, [], bio_model.parameters)[vertical_dof[0]]],
     ).expand()
     equilibrium_solver = rootfinder("soft_contact_static_equilibrium", "newton", vertical_acceleration)
-    qz_equilibrium = float(equilibrium_solver(0.1))
+
+    # A unilateral contact has exactly zero force and derivative out of contact.
+    # Start Newton from the plane so that it is initialized in penetration.
+    qz_equilibrium = float(equilibrium_solver(0.0))
 
     if not np.isfinite(qz_equilibrium) or abs(float(vertical_acceleration(qz_equilibrium))) > 1e-8:
         raise RuntimeError("Could not find a static equilibrium for the soft-contact example.")
