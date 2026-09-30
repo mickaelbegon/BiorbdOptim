@@ -369,6 +369,71 @@ def test_collocation_quadrature_interpolates_targets_at_stages(method, objective
     npt.assert_allclose(actual, expected)
 
 
+@pytest.mark.parametrize("method", ["radau", "legendre"])
+def test_collocation_quadrature_matches_analytic_integral_and_improves_on_left_rectangle(method):
+    """Degree-three collocation integrates x(t)**2 exactly, unlike a left rectangle at x(0)=0."""
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    target = np.zeros((2, 3))
+    ode_solver = OdeSolver.COLLOCATION(polynomial_degree=3, method=method)
+    collocation_ocp = prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=2,
+        integration_rule=QuadratureRule.COLLOCATION,
+        objective="qdot",
+        control_type=ControlType.CONSTANT,
+        target=target,
+        ode_solver=ode_solver,
+    )
+    collocation_function = collocation_ocp.nlp[0].J[0].weighted_function[0]
+    state_size = collocation_ocp.nlp[0].states.shape
+    qdot_indices = np.asarray(collocation_ocp.nlp[0].states["qdot"].index)
+    collocation_abscissas = np.asarray(collocation_points(3, method))
+    collocation_x = np.zeros((collocation_function.size_in("x")[0], 1))
+    for stage_index, collocation_abscissa in enumerate(collocation_abscissas):
+        collocation_x[(stage_index + 1) * state_size + qdot_indices[0], 0] = collocation_abscissa
+
+    collocation_cost = np.asarray(
+        collocation_function(
+            0.0,
+            1.0,
+            collocation_x,
+            np.zeros((collocation_function.size_in("u")[0], 1)),
+            [],
+            [],
+            [],
+            np.ones((2, 1)),
+            target[:, :2],
+        )
+    ).reshape(-1)
+
+    left_rectangle_ocp = prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=2,
+        integration_rule=QuadratureRule.RECTANGLE_LEFT,
+        objective="qdot",
+        control_type=ControlType.CONSTANT,
+        ode_solver=OdeSolver.COLLOCATION(polynomial_degree=3, method=method),
+    )
+    left_rectangle_function = left_rectangle_ocp.nlp[0].J[0].weighted_function[0]
+    left_rectangle_cost = np.asarray(
+        left_rectangle_function(
+            0.0,
+            1.0,
+            np.zeros((left_rectangle_function.size_in("x")[0], 1)),
+            np.zeros((left_rectangle_function.size_in("u")[0], 1)),
+            [],
+            [],
+            [],
+            np.ones((2, 1)),
+            np.zeros((2, 1)),
+        )
+    ).reshape(-1)
+
+    npt.assert_allclose(collocation_cost, [1 / 3, 0.0])
+    npt.assert_allclose(left_rectangle_cost, [0.0, 0.0])
+
+
 @pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])
 @pytest.mark.parametrize("objective", ["torque", "qdot"])
 @pytest.mark.parametrize(
