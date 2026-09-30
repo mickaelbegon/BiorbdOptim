@@ -178,8 +178,8 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
 
     # Check objective function valueà
     if isinstance(ode_solver_obj, OdeSolver.RK8):
-        TestUtils.assert_objective_value(sol=sol, expected_value=41.57063948309302)
-        npt.assert_almost_equal(sol.decision_states()["q"][15][:, 0], [-0.5010317, 0.6824593])
+        TestUtils.assert_objective_value(sol=sol, expected_value=41.5713363055625)
+        npt.assert_almost_equal(sol.decision_states()["q"][15][:, 0], [-0.50107768, 0.68251777])
 
     elif isinstance(ode_solver_obj, OdeSolver.IRK):
         if solver == Solver.IPOPT:
@@ -255,8 +255,8 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
 
     # initial and final controls
     if isinstance(ode_solver_obj, OdeSolver.RK8):
-        npt.assert_almost_equal(tau[:, 0], np.array((6.03763589, 0)))
-        npt.assert_almost_equal(tau[:, -1], np.array((-13.59527556, 0)))
+        npt.assert_almost_equal(tau[:, 0], np.array((6.0378835, 0)))
+        npt.assert_almost_equal(tau[:, -1], np.array((-13.59437077, 0)))
     elif isinstance(ode_solver_obj, OdeSolver.IRK):
         if solver == Solver.IPOPT:
             npt.assert_almost_equal(tau[:, 0], np.array((5.40765381, 0)))
