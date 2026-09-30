@@ -2,10 +2,10 @@
 A very simple optimal control program playing with a soft contact sphere rolling going from one point to another.
 
 The soft contact sphere are hard to make converge and sensitive to parameters.
-One could use ContactType.SOFT_IMPLICIT to ease the convergence.
 """
 
 import numpy as np
+from casadi import Function, MX, rootfinder
 from bioptim import (
     BiorbdModel,
     OptimalControlProgram,
@@ -21,10 +21,7 @@ from bioptim import (
     OdeSolverBase,
     Node,
     Solver,
-    Shooting,
-    Solution,
     SoftContactDynamics,
-    SolutionIntegrator,
     PhaseDynamics,
     SolutionMerge,
     ContactType,
@@ -67,40 +64,42 @@ def prepare_single_shooting(
     )
 
 
-def initial_states_from_single_shooting(model, ns, tf, ode_solver):
-    ocp = prepare_single_shooting(model, ns, tf, ode_solver)
+def initial_states_from_static_equilibrium(model):
+    """
+    Compute the static initial state of the rolling sphere.
 
-    # Find equilibrium
-    dt = np.array([tf / ns])
+    The former initialization integrated a transient drop for the duration of
+    the OCP. Its result therefore varied with the horizon and could conflict
+    with the hard initial marker constraint. Solving the vertical acceleration
+    directly gives a reproducible equilibrium instead.
+    """
+
+    bio_model = BiorbdModel(model)
+    vertical_dof = [i for i, name in enumerate(bio_model.name_dof) if name.endswith("TransZ")]
+    if len(vertical_dof) != 1:
+        raise RuntimeError("The soft-contact example requires exactly one vertical translational degree of freedom.")
+
+    qz = MX.sym("qz")
+    q = MX.zeros(bio_model.nb_q, 1)
+    q[vertical_dof[0]] = qz
+    qdot = MX.zeros(bio_model.nb_qdot, 1)
+    tau = MX.zeros(bio_model.nb_tau, 1)
+    vertical_acceleration = Function(
+        "soft_contact_static_vertical_acceleration",
+        [qz],
+        [bio_model.forward_dynamics()(q, qdot, tau, [], bio_model.parameters)[vertical_dof[0]]],
+    ).expand()
+    equilibrium_solver = rootfinder("soft_contact_static_equilibrium", "newton", vertical_acceleration)
+    qz_equilibrium = float(equilibrium_solver(0.1))
+
+    if not np.isfinite(qz_equilibrium) or abs(float(vertical_acceleration(qz_equilibrium))) > 1e-8:
+        raise RuntimeError("Could not find a static equilibrium for the soft-contact example.")
+
     x = InitialGuessList()
-    x["q"] = [0, 0.10, 0]
-    x["qdot"] = [1e-10, 1e-10, 1e-10]
-    u = InitialGuessList()
-    u["tau"] = [0, 0, 0]
-    p = InitialGuessList()
-    a = InitialGuessList()
-
-    sol_from_initial_guess = Solution.from_initial_guess(ocp, [dt, x, u, p, a])
-    sol = sol_from_initial_guess.integrate(
-        shooting_type=Shooting.SINGLE, integrator=SolutionIntegrator.OCP, to_merge=SolutionMerge.NODES
-    )
-    # s.animate()
-
-    # Rolling Sphere at equilibrium
-    x0 = sol["q"][:, -1]
-    x = InitialGuessList()
-    x["q"] = x0
-    x["qdot"] = np.array([0] * 3)
-    # u = InitialGuessList()
-    # u["tau"] = [0, 0, -10]
-    # p = InitialGuessList()
-    # a = InitialGuessList()
-
-    # sol_from_initial_guess = Solution.from_initial_guess(ocp, [dt, x, u, p, a])
-    # sol2 = sol_from_initial_guess.integrate(
-    #   shooting_type=Shooting.SINGLE, integrator=SolutionIntegrator.OCP, to_merge=SolutionMerge.NODES
-    # )
-    # sol2.animate()
+    q_initial = np.zeros(bio_model.nb_q)
+    q_initial[vertical_dof[0]] = qz_equilibrium
+    x["q"] = q_initial
+    x["qdot"] = np.zeros(bio_model.nb_qdot)
 
     return x
 
@@ -169,7 +168,7 @@ def prepare_ocp(
     x_bounds["q"] = bio_model.bounds_from_ranges("q")
     x_bounds["qdot"] = bio_model.bounds_from_ranges("qdot")
 
-    init = initial_states_from_single_shooting(biorbd_model_path, ns=n_shooting, tf=final_time, ode_solver=ode_solver)
+    init = initial_states_from_static_equilibrium(biorbd_model_path)
     x_bounds["q"].min[:, 0] = (init["q"].init - slack)[:, 0]
     x_bounds["q"].max[:, 0] = (init["q"].init + slack)[:, 0]
 

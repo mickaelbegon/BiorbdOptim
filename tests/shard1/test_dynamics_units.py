@@ -5,7 +5,7 @@ from bioptim.dynamics.configure_problem import (
     _check_numerical_timeseries_format,
     _check_contacts_in_biomodel,
 )
-from bioptim import ContactType, BiorbdModel
+from bioptim import BiorbdModel, ContactType, Dynamics, DynamicsFcn, SoftContactDynamics
 from ..utils import TestUtils
 
 
@@ -102,3 +102,17 @@ def test_check_contacts_in_biomodel_rigid_contact_and_flag_false():
 
 def test_check_contacts_in_biomodel_soft_contact_and_flag_false():
     _check_contacts_in_biomodel([], MODEL_SOFT_CONTACT, 0)
+
+
+def test_soft_contact_requires_expanded_dynamics():
+    with pytest.raises(ValueError, match="Soft contacts require expand_dynamics=True"):
+        Dynamics(DynamicsFcn.TORQUE_DRIVEN, contact_type=[ContactType.SOFT_EXPLICIT], expand_dynamics=False)
+
+
+def test_soft_contact_constraint_is_explicitly_unsupported():
+    with pytest.raises(NotImplementedError, match="SoftContactDynamics.CONSTRAINT is not implemented"):
+        Dynamics(
+            DynamicsFcn.TORQUE_DRIVEN,
+            contact_type=[ContactType.SOFT_EXPLICIT],
+            soft_contacts_dynamics=SoftContactDynamics.CONSTRAINT,
+        )

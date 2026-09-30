@@ -2036,6 +2036,12 @@ class Dynamics(OptionGeneric):
         if not isinstance(ode_solver, OdeSolverBase):
             raise RuntimeError("ode_solver should be built an instance of OdeSolver")
 
+        _check_soft_contact_configuration(
+            contact_type,
+            extra_parameters.get("soft_contacts_dynamics", SoftContactDynamics.ODE),
+            expand_dynamics,
+        )
+
         super(Dynamics, self).__init__(type=dynamics_type, **extra_parameters)
         self.dynamic_function = dynamic_function
         self.configure = configure
@@ -2124,3 +2130,24 @@ def _check_contacts_in_biomodel(
     # Check that contact types are not declared at the same time
     if len(contact_type) > 1:
         raise NotImplementedError("It is not possible to use multiple ContactType at the same time yet.")
+
+
+def _check_soft_contact_configuration(
+    contact_type: list[ContactType] | tuple[ContactType],
+    soft_contacts_dynamics: SoftContactDynamics,
+    expand_dynamics: Bool,
+) -> None:
+    """Validate the currently supported soft-contact configurations."""
+
+    if soft_contacts_dynamics == SoftContactDynamics.CONSTRAINT:
+        raise NotImplementedError(
+            "SoftContactDynamics.CONSTRAINT is not implemented: its contact force is not injected into the ODE. "
+            "Use SoftContactDynamics.ODE until the implicit formulation is implemented."
+        )
+
+    if (
+        ContactType.SOFT_EXPLICIT in contact_type or ContactType.SOFT_IMPLICIT in contact_type
+    ) and not expand_dynamics:
+        raise ValueError(
+            "Soft contacts require expand_dynamics=True because biorbd's unexpanded soft-contact Jacobians contain NaNs."
+        )

@@ -1,9 +1,45 @@
-from bioptim import OdeSolver, PhaseDynamics, SolutionMerge
+from bioptim import BiorbdModel, OdeSolver, PhaseDynamics, SolutionMerge
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 from ..utils import TestUtils
+
+
+def test_soft_contact_static_initial_state():
+    from bioptim.examples.torque_driven_ocp import example_soft_contact as ocp_module
+
+    bioptim_folder = TestUtils.module_folder(ocp_module)
+    model_path = bioptim_folder + "/models/soft_contact_sphere.bioMod"
+    initial_states = ocp_module.initial_states_from_static_equilibrium(model_path)
+    q = initial_states["q"].init[:, 0]
+    qdot = initial_states["qdot"].init[:, 0]
+
+    model = BiorbdModel(model_path)
+    qddot = model.forward_dynamics()(q, qdot, np.zeros(model.nb_tau), [], np.empty((0, 1)))
+
+    npt.assert_allclose(q, np.array([0.0, 0.09331769696432672, 0.0]), atol=1e-10)
+    npt.assert_allclose(qdot, np.zeros(model.nb_qdot), atol=1e-12)
+    npt.assert_allclose(np.asarray(qddot).squeeze(), np.zeros(model.nb_qddot), atol=1e-8)
+
+
+@pytest.mark.parametrize("final_time", [0.1, 0.5])
+def test_soft_contact_initial_bounds_are_independent_of_horizon(final_time):
+    from bioptim.examples.torque_driven_ocp import example_soft_contact as ocp_module
+
+    bioptim_folder = TestUtils.module_folder(ocp_module)
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/models/soft_contact_sphere.bioMod",
+        final_time=final_time,
+        n_shooting=2,
+        n_threads=1,
+        ode_solver=OdeSolver.RK8(),
+    )
+
+    q_bounds = ocp.nlp[0].x_bounds["q"]
+    marker_start = np.array([0.0, 0.0933176954, 0.0])
+    assert np.all(q_bounds.min[:, 0] <= marker_start)
+    assert np.all(marker_start <= q_bounds.max[:, 0])
 
 
 @pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])
