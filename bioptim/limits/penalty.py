@@ -77,6 +77,7 @@ class PenaltyFunctionAbstract:
             if (
                 penalty.integration_rule != QuadratureRule.APPROXIMATE_TRAPEZOIDAL
                 and penalty.integration_rule != QuadratureRule.TRAPEZOIDAL
+                and penalty.integration_rule != QuadratureRule.COLLOCATION
             ):
                 # todo: for trapezoidal integration
                 penalty.add_target_to_plot(controller=controller, combine_to=f"{key}_states")
@@ -166,6 +167,7 @@ class PenaltyFunctionAbstract:
             is_target_plotable = (
                 penalty.integration_rule != QuadratureRule.APPROXIMATE_TRAPEZOIDAL
                 and penalty.integration_rule != QuadratureRule.TRAPEZOIDAL
+                and penalty.integration_rule != QuadratureRule.COLLOCATION
             )
             if is_target_plotable:
                 penalty.add_target_to_plot(controller=controller, combine_to=f"{key}")

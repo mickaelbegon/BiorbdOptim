@@ -84,6 +84,7 @@ class Objective(PenaltyOption):
                 QuadratureRule.RECTANGLE_LEFT,
                 QuadratureRule.TRAPEZOIDAL,
                 QuadratureRule.APPROXIMATE_TRAPEZOIDAL,
+                QuadratureRule.COLLOCATION,
             ):
                 raise NotImplementedError(
                     f"{extra_parameters['integration_rule']} has not been implemented yet for objective functions."

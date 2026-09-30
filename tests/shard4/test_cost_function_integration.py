@@ -23,6 +23,7 @@ from bioptim import (
 import numpy as np
 import numpy.testing as npt
 import pytest
+from casadi import collocation_coeff, collocation_points
 
 from ..utils import TestUtils
 
@@ -296,6 +297,76 @@ def test_pendulum_collocation(control_type, integration_rule, objective, phase_d
                 TestUtils.assert_objective_value(sol=sol, expected_value=11.795040652982784)
             else:
                 TestUtils.assert_objective_value(sol=sol, expected_value=11.383415350091333)
+
+
+@pytest.mark.parametrize("method", ["radau", "legendre"])
+@pytest.mark.parametrize(
+    "objective, control_type",
+    [
+        ("qdot", ControlType.CONSTANT),
+        ("torque", ControlType.CONSTANT),
+        ("torque", ControlType.LINEAR_CONTINUOUS),
+    ],
+)
+def test_collocation_quadrature_interpolates_targets_at_stages(method, objective, control_type):
+    """COLLOCATION evaluates the stage cost and the linearly interpolated shooting-node target at each c_j."""
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    target = np.array([[0.0, 4.0, 8.0], [0.0, 40.0, 80.0]])
+    ocp = prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=2,
+        integration_rule=QuadratureRule.COLLOCATION,
+        objective=objective,
+        control_type=control_type,
+        target=target,
+        ode_solver=OdeSolver.COLLOCATION(polynomial_degree=3, method=method),
+    )
+
+    weighted_function = ocp.nlp[0].J[0].weighted_function[0]
+    state_size = ocp.nlp[0].states.shape
+    qdot_indices = list(ocp.nlp[0].states["qdot"].index)
+    collocation_abscissas = np.asarray(collocation_points(3, method))
+    x = np.zeros((weighted_function.size_in("x")[0], 1))
+    for stage_index, collocation_abscissa in enumerate(collocation_abscissas):
+        x[(stage_index + 1) * state_size + np.asarray(qdot_indices), 0] = [
+            1.0 + 3.0 * collocation_abscissa,
+            10.0 + 30.0 * collocation_abscissa,
+        ]
+
+    if control_type == ControlType.CONSTANT:
+        u = np.array([[2.0], [20.0], [0.0], [0.0]])
+        stage_values = np.repeat(np.array([[2.0, 20.0]]), len(collocation_abscissas), axis=0)
+    else:
+        u = np.array([[1.0], [10.0], [4.0], [40.0]])
+        stage_values = np.array(
+            [[1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
+            for collocation_abscissa in collocation_abscissas]
+        )
+
+    if objective == "qdot":
+        stage_values = np.array(
+            [[1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
+            for collocation_abscissa in collocation_abscissas]
+        )
+
+    target_at_stages = np.array([[4.0 * c_j, 40.0 * c_j] for c_j in collocation_abscissas])
+    collocation_weights = collocation_coeff(collocation_abscissas)[2].full().reshape(-1)
+    expected = 0.5 * np.sum(collocation_weights[:, np.newaxis] * (stage_values - target_at_stages) ** 2, axis=0)
+    actual = np.asarray(
+        weighted_function(
+            0.0,
+            0.5,
+            x,
+            u,
+            [],
+            [],
+            [],
+            np.ones((2, 1)),
+            target[:, :2],
+        )
+    ).reshape(-1)
+    npt.assert_allclose(actual, expected)
 
 
 @pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])

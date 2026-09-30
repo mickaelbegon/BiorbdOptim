@@ -67,7 +67,9 @@ def prepare_ocp(
     control_type: ControlType
         The type of the controls
     quadrature_rule: QuadratureRule
-        The quadrature method to use to integrate the objective functions
+        The quadrature method to use to integrate the objective functions. Combine
+        QuadratureRule.COLLOCATION with OdeSolver.COLLOCATION to integrate each
+        Lagrange objective at the collocation stages with the matching weights.
 
     Returns
     -------

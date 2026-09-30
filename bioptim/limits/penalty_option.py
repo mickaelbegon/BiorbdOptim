@@ -1,7 +1,7 @@
 from typing import Any, Callable
 
 import numpy as np
-from casadi import vertcat, Function, jacobian, diag
+from casadi import collocation_coeff, collocation_points, vertcat, Function, jacobian, diag
 
 from ..optimization.optimization_variable import OptimizationVariableList
 from .penalty_controller import PenaltyController
@@ -163,7 +163,11 @@ class PenaltyOption(OptionGeneric):
         self.node: Node | list | tuple = node
         self.quadratic = quadratic
         self.integration_rule = integration_rule
-        if self.integration_rule in (QuadratureRule.APPROXIMATE_TRAPEZOIDAL, QuadratureRule.TRAPEZOIDAL):
+        if self.integration_rule in (
+            QuadratureRule.APPROXIMATE_TRAPEZOIDAL,
+            QuadratureRule.TRAPEZOIDAL,
+            QuadratureRule.COLLOCATION,
+        ):
             integrate = True
         self.derivative = derivative
         self.explicit_derivative = explicit_derivative
@@ -200,6 +204,7 @@ class PenaltyOption(OptionGeneric):
             if (
                 self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL
                 or self.integration_rule == QuadratureRule.TRAPEZOIDAL
+                or self.integration_rule == QuadratureRule.COLLOCATION
             )
             else True
         )
@@ -477,7 +482,10 @@ class PenaltyOption(OptionGeneric):
             raise RuntimeError("The constraint must return a vector not a matrix.")
 
         is_trapezoidal = self.integration_rule in (QuadratureRule.APPROXIMATE_TRAPEZOIDAL, QuadratureRule.TRAPEZOIDAL)
-        target_shape = tuple([len(self.rows), len(self.cols) + 1 if is_trapezoidal else len(self.cols)])
+        is_collocation = self.integration_rule == QuadratureRule.COLLOCATION
+        target_shape = tuple(
+            [len(self.rows), len(self.cols) + 1 if (is_trapezoidal or is_collocation) else len(self.cols)]
+        )
         target_cx = controller.cx.sym("target", target_shape)
         if isinstance(self.weight, (ObjectiveWeight, ConstraintWeight)):
             weight_cx = controller.cx.sym("weight", len(self.rows), len(self.cols))
@@ -485,7 +493,113 @@ class PenaltyOption(OptionGeneric):
             RuntimeError(f"weight must be a ObjectiveWeight or ConstraintWeight, not {type(self.weight)}")
         exponent = 2 if (self.quadratic and isinstance(self.weight, ObjectiveWeight)) else 1
 
-        if is_trapezoidal:
+        if is_collocation:
+            ode_solver = controller.get_nlp.dynamics_type.ode_solver
+            if not ode_solver.is_direct_collocation:
+                raise NotImplementedError(
+                    "QuadratureRule.COLLOCATION is only implemented for direct collocation ode solvers."
+                )
+
+            collocation_abscissas = collocation_points(ode_solver.polynomial_degree, ode_solver.method)
+            _, _, collocation_weights = collocation_coeff(collocation_abscissas)
+
+            state_cx_stages = controller.states_scaled.cx_intermediates_list
+            algebraic_state_cx_stages = controller.algebraic_states_scaled.cx_intermediates_list
+            if ode_solver.duplicate_starting_point:
+                state_cx_stages = state_cx_stages[1:]
+                algebraic_state_cx_stages = algebraic_state_cx_stages[1:]
+
+            if len(state_cx_stages) != ode_solver.polynomial_degree:
+                raise RuntimeError(
+                    "The number of direct collocation state stages does not match the collocation polynomial degree."
+                )
+
+            state_cx_start = controller.states_scaled.cx_start
+            control_cx_start = controller.controls_scaled.cx_start
+            parameter_cx_start = controller.parameters_scaled.cx
+            algebraic_state_cx_start = controller.algebraic_states_scaled.cx_start
+            numerical_timeseries_cx_start = controller.numerical_timeseries.cx_start
+
+            func_at_stage = Function(
+                name,
+                [
+                    time,
+                    phases_dt,
+                    state_cx_start,
+                    control_cx_start,
+                    parameter_cx_start,
+                    algebraic_state_cx_start,
+                    numerical_timeseries_cx_start,
+                ],
+                [sub_fcn],
+            )
+
+            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+                control_cx_stages = [control_cx_start] * ode_solver.polynomial_degree
+            elif self.control_types[0] == ControlType.LINEAR_CONTINUOUS:
+                control_cx_end = controller.controls_scaled.cx_end
+                control_cx_stages = [
+                    control_cx_start + collocation_abscissa * (control_cx_end - control_cx_start)
+                    for collocation_abscissa in collocation_abscissas
+                ]
+            else:
+                raise NotImplementedError(f"Control type {self.control_types[0]} not implemented yet")
+
+            # A COLLOCATION target is specified at shooting nodes, as for TRAPEZOIDAL. It is evaluated at each
+            # collocation stage by linear interpolation between the targets at the beginning and end of the interval.
+            modified_fcn = 0
+            for stage_index, (collocation_abscissa, state_cx_stage, control_cx_stage) in enumerate(
+                zip(collocation_abscissas, state_cx_stages, control_cx_stages)
+            ):
+                algebraic_state_cx_stage = (
+                    algebraic_state_cx_stages[stage_index]
+                    if algebraic_state_cx_stages
+                    else algebraic_state_cx_start
+                )
+                target_at_stage = target_cx[:, 0] + collocation_abscissa * (target_cx[:, 1] - target_cx[:, 0])
+                function_at_stage = func_at_stage(
+                    time + dt * collocation_abscissa,
+                    phases_dt,
+                    state_cx_stage,
+                    control_cx_stage,
+                    parameter_cx_start,
+                    algebraic_state_cx_stage,
+                    numerical_timeseries_cx_start,
+                )
+                modified_fcn += float(collocation_weights[stage_index]) * (
+                    function_at_stage - target_at_stage
+                ) ** exponent
+
+            # This reimplementation is required because input sizes change. The public target format remains one
+            # value per shooting node, while the returned value is the weighted sum over collocation stages.
+            self.function[node] = Function(
+                name,
+                [time, phases_dt, x, u, p, a, d],
+                [
+                    sum(
+                        float(collocation_weights[stage_index])
+                        * func_at_stage(
+                            time + dt * collocation_abscissa,
+                            phases_dt,
+                            state_cx_stage,
+                            control_cx_stage,
+                            parameter_cx_start,
+                            (
+                                algebraic_state_cx_stages[stage_index]
+                                if algebraic_state_cx_stages
+                                else algebraic_state_cx_start
+                            ),
+                            numerical_timeseries_cx_start,
+                        )
+                        for stage_index, (collocation_abscissa, state_cx_stage, control_cx_stage) in enumerate(
+                            zip(collocation_abscissas, state_cx_stages, control_cx_stages)
+                        )
+                    )
+                ],
+                ["t", "dt", "x", "u", "p", "a", "d"],
+                ["val"],
+            )
+        elif is_trapezoidal:
             # Hypothesis for APPROXIMATE_TRAPEZOIDAL: the function is continuous on states
             # it neglects the discontinuities at the beginning of the optimization
             param_cx_start = controller.parameters_scaled.cx

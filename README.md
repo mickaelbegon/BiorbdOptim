@@ -1267,8 +1267,11 @@ The objective functions are soft penalties of the optimization program.
 In other words, the solution tries to minimize the value as much as possible but will not complain if the objective remains high.
 The objective functions come in two formats: Lagrange and Mayer. 
 
-The Lagrange objective functions are integrated over the whole phase (actually over the selected nodes, usually Node.ALL). 
-One should note that integration is not given by the dynamics function but by the rectangle approximation over a node.
+The Lagrange objective functions are integrated over the whole phase (actually over the selected nodes, usually Node.ALL).
+By default, bioptim uses a left-rectangle approximation at each shooting node. For a direct-collocation phase,
+`integration_rule=QuadratureRule.COLLOCATION` instead evaluates the objective at the collocation stages and uses
+the matching collocation weights. Targets remain specified at shooting nodes and are linearly interpolated to the
+collocation stages.
 
 The Mayer objective functions are values at a single node, usually the Node.LAST. 
 
@@ -1775,6 +1778,7 @@ The type of integration used to integrate the cost function terms of Lagrange:
 - MIDPOINT: The integral is approximated by a midpoint rectangle rule (Midpoint Riemann sum).
 - APPROXIMATE_TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the beginning of the next interval.
 - TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the end of the current interval.
+- COLLOCATION: For a direct-collocation ODE solver, the integral uses that solver's collocation stages and weights. Targets are linearly interpolated from shooting nodes to stages.
 
 ### Enum: DefectType
 - QDOT_EQUALS_SLOPE: The slope of the COLLOCATION polynomial must be equal to the qdot.

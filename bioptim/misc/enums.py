@@ -214,6 +214,7 @@ class QuadratureRule(Enum):
     MIDPOINT = "midpoint"
     APPROXIMATE_TRAPEZOIDAL = "approximate_trapezoidal"
     TRAPEZOIDAL = "trapezoidal"
+    COLLOCATION = "collocation"
 
 
 class ContactType(Enum):
