@@ -148,9 +148,10 @@ def test_quadrature_rule():
     assert QuadratureRule.MIDPOINT.value == "midpoint"
     assert QuadratureRule.APPROXIMATE_TRAPEZOIDAL.value == "approximate_trapezoidal"
     assert QuadratureRule.TRAPEZOIDAL.value == "trapezoidal"
+    assert QuadratureRule.GAUSS_LEGENDRE_2.value == "gauss_legendre_2"
 
     # verify the number of elements
-    assert len(QuadratureRule) == 6
+    assert len(QuadratureRule) == 7
 
 
 def test_soft_contact_dynamics():

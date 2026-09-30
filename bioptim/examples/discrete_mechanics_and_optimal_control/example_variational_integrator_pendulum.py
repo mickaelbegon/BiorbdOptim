@@ -10,6 +10,7 @@ from bioptim import (
     InterpolationType,
     Objective,
     ObjectiveFcn,
+    QuadratureRule,
     Solver,
     VariationalBiorbdModel,
     VariationalOptimalControlProgram,
@@ -22,6 +23,7 @@ def prepare_ocp(
     final_time: float,
     n_shooting: int,
     use_sx: bool = True,
+    discrete_approximation: QuadratureRule = QuadratureRule.TRAPEZOIDAL,
 ) -> VariationalOptimalControlProgram:
     """
     The initialization of an ocp
@@ -36,13 +38,15 @@ def prepare_ocp(
         The number of shooting points to define int the direct multiple shooting program.
     use_sx: bool
         If the SX variable should be used instead of MX (can be extensive on RAM).
+    discrete_approximation: QuadratureRule
+        The quadrature rule used for the discrete Lagrangian.
 
     Returns
     -------
     The OptimalControlProgram ready to be solved.
     """
 
-    bio_model = VariationalBiorbdModel(bio_model_path)
+    bio_model = VariationalBiorbdModel(bio_model_path, discrete_approximation=discrete_approximation)
 
     # Add objective functions
     objective_functions = Objective(ObjectiveFcn.Lagrange.MINIMIZE_CONTROL, key="tau")
@@ -93,7 +97,12 @@ def main():
     n_shooting = 100
 
     # --- Prepare the ocp --- #
-    ocp = prepare_ocp(bio_model_path="models/pendulum.bioMod", final_time=1, n_shooting=n_shooting)
+    ocp = prepare_ocp(
+        bio_model_path="models/pendulum.bioMod",
+        final_time=1,
+        n_shooting=n_shooting,
+        discrete_approximation=QuadratureRule.GAUSS_LEGENDRE_2,
+    )
 
     # --- Print ocp structure --- #
     ocp.print(to_console=False, to_graph=False)

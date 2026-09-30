@@ -189,6 +189,7 @@ class QuadratureRule(Enum):
     MIDPOINT = "midpoint"
     APPROXIMATE_TRAPEZOIDAL = "approximate_trapezoidal"
     TRAPEZOIDAL = "trapezoidal"
+    GAUSS_LEGENDRE_2 = "gauss_legendre_2"
 
 
 class SoftContactDynamics(Enum):
