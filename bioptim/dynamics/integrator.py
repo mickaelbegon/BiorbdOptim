@@ -234,6 +234,24 @@ class Integrator:
 
         raise RuntimeError("Integrator is abstract, please specify a proper one")
 
+    def quadrature_stages(
+        self,
+        states: MX | SX,
+        controls: MX | SX,
+        params: MX | SX,
+        algebraic_states: MX | SX,
+        numerical_timeseries: MX | SX,
+    ) -> list[tuple[float, MX | SX, MX | SX, float]]:
+        """
+        Return the stages and normalized weights used to integrate a Lagrange term.
+
+        The returned tuples contain the time fraction in the shooting interval, the state and control evaluated at
+        this stage, and a weight normalized over the full shooting interval. Subclasses must use the same Butcher
+        tableau as their dynamics integration.
+        """
+
+        raise NotImplementedError(f"Quadrature from integrator stages is not implemented for {self.__class__.__name__}")
+
 
 class RK(Integrator):
     """
@@ -311,6 +329,53 @@ class RK(Integrator):
 
         raise RuntimeError("RK is abstract, please select a specific RK")
 
+    def _quadrature_stages_at_step(
+        self,
+        t0: float | MX | SX,
+        x_prev: MX | SX,
+        u: MX | SX,
+        p: MX | SX,
+        a: MX | SX,
+        d: MX | SX,
+    ) -> tuple[MX | SX, list[tuple[float, MX | SX, MX | SX, float]]]:
+        """Return the next state and the quadrature stages for a single finite element."""
+
+        raise NotImplementedError(
+            f"Quadrature from integrator stages is not implemented for {self.__class__.__name__}"
+        )
+
+    def quadrature_stages(
+        self,
+        states: MX | SX,
+        controls: MX | SX,
+        params: MX | SX,
+        algebraic_states: MX | SX,
+        numerical_timeseries: MX | SX,
+    ) -> list[tuple[float, MX | SX, MX | SX, float]]:
+        """Return all Runge--Kutta stages and their normalized quadrature weights."""
+
+        stages = []
+        x_prev = states
+        for step_index in range(self._n_step):
+            t0 = self.t_span_sym[0] + self._integration_time * step_index
+            x_next, step_stages = self._quadrature_stages_at_step(
+                t0, x_prev, controls, params, algebraic_states, numerical_timeseries
+            )
+            if self.model.nb_quaternions > 0:
+                x_next[: self.model.nb_q] = self.model.normalize_state_quaternions()(x_next[: self.model.nb_q])
+
+            stages.extend(
+                (
+                    (step_index + stage_time) / self._n_step,
+                    stage_state,
+                    stage_control,
+                    stage_weight / self._n_step,
+                )
+                for stage_time, stage_state, stage_control, stage_weight in step_stages
+            )
+            x_prev = x_next
+        return stages
+
     def compute_states_end(
         self,
         states: MX | SX,
@@ -343,6 +408,11 @@ class RK1(RK):
     def next_x(self, t0: float | MX | SX, x_prev: MX | SX, u: MX | SX, p: MX | SX, a: MX | SX, d: MX | SX) -> MX | SX:
         return x_prev + self.h * self.fun(vertcat(t0, self.dt), x_prev, self.get_u(u, t0), p, a, d)[:, self.ode_idx]
 
+    def _quadrature_stages_at_step(self, t0, x_prev, u, p, a, d):
+        u_start = self.get_u(u, t0)
+        k1 = self.fun(vertcat(t0, self.dt), x_prev, u_start, p, a, d)[:, self.ode_idx]
+        return x_prev + self.h * k1, [(0.0, x_prev, u_start, 1.0)]
+
 
 class RK2(RK):
     """
@@ -362,6 +432,16 @@ class RK2(RK):
             ]
         )
 
+    def _quadrature_stages_at_step(self, t0, x_prev, u, p, a, d):
+        h = self.h
+        dt = self.dt
+        u_start = self.get_u(u, t0)
+        k1 = self.fun(vertcat(t0, dt), x_prev, u_start, p, a, d)[:, self.ode_idx]
+        x_mid = x_prev + h / 2 * k1
+        u_mid = self.get_u(u, t0 + h / 2)
+        k2 = self.fun(vertcat(t0 + h / 2, dt), x_mid, u_mid, p, a, d)[:, self.ode_idx]
+        return x_prev + h * k2, [(0.5, x_mid, u_mid, 1.0)]
+
 
 class RK4(RK):
     """
@@ -378,11 +458,43 @@ class RK4(RK):
         k4 = self.fun(vertcat(t0 + h, dt), x_prev + h * k3, self.get_u(u, t0 + h), p, a, d)[:, self.ode_idx]
         return x_prev + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
 
+    def _quadrature_stages_at_step(self, t0, x_prev, u, p, a, d):
+        h = self.h
+        dt = self.dt
+        u_start = self.get_u(u, t0)
+        k1 = self.fun(vertcat(t0, dt), x_prev, u_start, p, a, d)[:, self.ode_idx]
+        x_mid_1 = x_prev + h / 2 * k1
+        u_mid = self.get_u(u, t0 + h / 2)
+        k2 = self.fun(vertcat(t0 + h / 2, dt), x_mid_1, u_mid, p, a, d)[:, self.ode_idx]
+        x_mid_2 = x_prev + h / 2 * k2
+        k3 = self.fun(vertcat(t0 + h / 2, dt), x_mid_2, u_mid, p, a, d)[:, self.ode_idx]
+        x_end = x_prev + h * k3
+        u_end = self.get_u(u, t0 + h)
+        k4 = self.fun(vertcat(t0 + h, dt), x_end, u_end, p, a, d)[:, self.ode_idx]
+        return x_prev + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4), [
+            (0.0, x_prev, u_start, 1 / 6),
+            (0.5, x_mid_1, u_mid, 1 / 3),
+            (0.5, x_mid_2, u_mid, 1 / 3),
+            (1.0, x_end, u_end, 1 / 6),
+        ]
+
 
 class RK8(RK4):
     """
     Numerical integration using eighth order Runge-Kutta method.
     """
+
+    def quadrature_stages(
+        self,
+        states: MX | SX,
+        controls: MX | SX,
+        params: MX | SX,
+        algebraic_states: MX | SX,
+        numerical_timeseries: MX | SX,
+    ) -> list[tuple[float, MX | SX, MX | SX, float]]:
+        raise NotImplementedError(
+            "Quadrature from RK8 stages is unavailable until the RK8 Butcher tableau correction is integrated."
+        )
 
     def next_x(self, t0: float | MX | SX, x_prev: MX | SX, u: MX | SX, p: MX | SX, a: MX | SX, d: MX | SX) -> MX | SX:
         h = self.h

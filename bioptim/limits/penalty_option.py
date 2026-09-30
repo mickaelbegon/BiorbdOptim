@@ -166,6 +166,7 @@ class PenaltyOption(OptionGeneric):
         if self.integration_rule in (
             QuadratureRule.APPROXIMATE_TRAPEZOIDAL,
             QuadratureRule.TRAPEZOIDAL,
+            QuadratureRule.INTEGRATOR,
             QuadratureRule.COLLOCATION,
         ):
             integrate = True
@@ -204,6 +205,7 @@ class PenaltyOption(OptionGeneric):
             if (
                 self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL
                 or self.integration_rule == QuadratureRule.TRAPEZOIDAL
+                or self.integration_rule == QuadratureRule.INTEGRATOR
                 or self.integration_rule == QuadratureRule.COLLOCATION
             )
             else True
@@ -482,9 +484,10 @@ class PenaltyOption(OptionGeneric):
             raise RuntimeError("The constraint must return a vector not a matrix.")
 
         is_trapezoidal = self.integration_rule in (QuadratureRule.APPROXIMATE_TRAPEZOIDAL, QuadratureRule.TRAPEZOIDAL)
+        is_integrator = self.integration_rule == QuadratureRule.INTEGRATOR
         is_collocation = self.integration_rule == QuadratureRule.COLLOCATION
         target_shape = tuple(
-            [len(self.rows), len(self.cols) + 1 if (is_trapezoidal or is_collocation) else len(self.cols)]
+            [len(self.rows), len(self.cols) + 1 if (is_trapezoidal or is_integrator or is_collocation) else len(self.cols)]
         )
         target_cx = controller.cx.sym("target", target_shape)
         if isinstance(self.weight, (ObjectiveWeight, ConstraintWeight)):
@@ -493,7 +496,78 @@ class PenaltyOption(OptionGeneric):
             RuntimeError(f"weight must be a ObjectiveWeight or ConstraintWeight, not {type(self.weight)}")
         exponent = 2 if (self.quadratic and isinstance(self.weight, ObjectiveWeight)) else 1
 
-        if is_collocation:
+        if is_integrator:
+            ode_solver = controller.get_nlp.dynamics_type.ode_solver
+            if not ode_solver.is_direct_shooting:
+                raise NotImplementedError(
+                    "QuadratureRule.INTEGRATOR is only implemented for direct shooting ode solvers. "
+                    "Use QuadratureRule.COLLOCATION for direct collocation."
+                )
+
+            state_cx_start = controller.states_scaled.cx_start
+            control_cx_start = controller.controls_scaled.cx_start
+            parameter_cx_start = controller.parameters_scaled.cx
+            algebraic_state_cx_start = controller.algebraic_states_scaled.cx_start
+            numerical_timeseries_cx_start = controller.numerical_timeseries.cx_start
+
+            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+                control_cx_integrate = control_cx_start
+            elif self.control_types[0] == ControlType.LINEAR_CONTINUOUS:
+                control_cx_integrate = vertcat(control_cx_start, controller.controls_scaled.cx_end).reshape((-1, 2))
+            else:
+                raise NotImplementedError(f"Control type {self.control_types[0]} not implemented yet")
+
+            try:
+                quadrature_stages = controller.integrate.quadrature_stages(
+                    state_cx_start,
+                    control_cx_integrate,
+                    parameter_cx_start,
+                    algebraic_state_cx_start,
+                    numerical_timeseries_cx_start,
+                )
+            except NotImplementedError as error:
+                raise NotImplementedError(
+                    f"QuadratureRule.INTEGRATOR is not implemented for {ode_solver}."
+                ) from error
+
+            func_at_stage = Function(
+                name,
+                [
+                    time,
+                    phases_dt,
+                    state_cx_start,
+                    control_cx_start,
+                    parameter_cx_start,
+                    algebraic_state_cx_start,
+                    numerical_timeseries_cx_start,
+                ],
+                [sub_fcn],
+            )
+
+            modified_fcn = 0
+            function_fcn = 0
+            for stage_fraction, state_cx_stage, control_cx_stage, stage_weight in quadrature_stages:
+                function_at_stage = func_at_stage(
+                    time + dt * stage_fraction,
+                    phases_dt,
+                    state_cx_stage,
+                    control_cx_stage,
+                    parameter_cx_start,
+                    algebraic_state_cx_start,
+                    numerical_timeseries_cx_start,
+                )
+                target_at_stage = target_cx[:, 0] + stage_fraction * (target_cx[:, 1] - target_cx[:, 0])
+                function_fcn += stage_weight * function_at_stage
+                modified_fcn += stage_weight * (function_at_stage - target_at_stage) ** exponent
+
+            self.function[node] = Function(
+                name,
+                [time, phases_dt, x, u, p, a, d],
+                [function_fcn],
+                ["t", "dt", "x", "u", "p", "a", "d"],
+                ["val"],
+            )
+        elif is_collocation:
             ode_solver = controller.get_nlp.dynamics_type.ode_solver
             if not ode_solver.is_direct_collocation:
                 raise NotImplementedError(

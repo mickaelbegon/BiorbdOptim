@@ -68,8 +68,9 @@ def prepare_ocp(
         The type of the controls
     quadrature_rule: QuadratureRule
         The quadrature method to use to integrate the objective functions. Combine
-        QuadratureRule.COLLOCATION with OdeSolver.COLLOCATION to integrate each
-        Lagrange objective at the collocation stages with the matching weights.
+        QuadratureRule.INTEGRATOR with OdeSolver.RK1, RK2, or RK4 to integrate each
+        Lagrange objective at Runge--Kutta stages, or QuadratureRule.COLLOCATION with
+        OdeSolver.COLLOCATION to use collocation stages and weights.
 
     Returns
     -------
@@ -196,7 +197,11 @@ def main():
     Defines a multiphase ocp and animate the results
     """
     biorbd_model_path = ExampleUtils.folder + "/models/cube.bioMod"
-    ocp = prepare_ocp(biorbd_model_path=biorbd_model_path, long_optim=False)
+    ocp = prepare_ocp(
+        biorbd_model_path=biorbd_model_path,
+        long_optim=False,
+        quadrature_rule=QuadratureRule.INTEGRATOR,
+    )
     ocp.add_plot_penalty(CostType.ALL)
 
     # --- Solve the program --- #

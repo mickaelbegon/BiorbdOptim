@@ -141,10 +141,11 @@ def test_quadrature_rule():
     assert QuadratureRule.MIDPOINT.value == "midpoint"
     assert QuadratureRule.APPROXIMATE_TRAPEZOIDAL.value == "approximate_trapezoidal"
     assert QuadratureRule.TRAPEZOIDAL.value == "trapezoidal"
+    assert QuadratureRule.INTEGRATOR.value == "integrator"
     assert QuadratureRule.COLLOCATION.value == "collocation"
 
     # verify the number of elements
-    assert len(QuadratureRule) == 7
+    assert len(QuadratureRule) == 8
 
 
 def test_defects_type():

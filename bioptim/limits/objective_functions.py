@@ -84,6 +84,7 @@ class Objective(PenaltyOption):
                 QuadratureRule.RECTANGLE_LEFT,
                 QuadratureRule.TRAPEZOIDAL,
                 QuadratureRule.APPROXIMATE_TRAPEZOIDAL,
+                QuadratureRule.INTEGRATOR,
                 QuadratureRule.COLLOCATION,
             ):
                 raise NotImplementedError(
