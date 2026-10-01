@@ -4,6 +4,7 @@ import numpy as np
 from casadi import vertcat, Function, jacobian, diag
 
 from ..optimization.optimization_variable import OptimizationVariableList
+from .penalty_classification import PenaltyClassification
 from .penalty_controller import PenaltyController
 from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from .penalty_nodes import PenaltyNodeResolver
@@ -97,9 +98,9 @@ class PenaltyOption(OptionGeneric):
     add_or_replace_to_penalty_pool(self, ocp, nlp)
         Doing some configuration on the penalty and add it to the list of penalty
     _add_penalty_to_pool(self, controller: list[PenaltyController])
-        Return the penalty pool for the specified penalty (abstract)
+        Add the penalty to its classified pool
     ensure_penalty_sanity(self, ocp, nlp)
-        Resets a penalty. A negative penalty index creates a new empty penalty (abstract)
+        Resets a penalty. A negative penalty index creates a new empty penalty
     _get_penalty_node_list(self, ocp, nlp) -> PenaltyController
         Get the actual node (time, X and U) specified in the penalty
     """
@@ -121,6 +122,7 @@ class PenaltyOption(OptionGeneric):
         cols: AnySequenceOptional = None,
         custom_function: Callable = None,
         penalty_type: PenaltyType = PenaltyType.USER,
+        _classification: PenaltyClassification | None = None,
         is_stochastic: Bool = False,
         multi_thread: Bool = None,
         expand: Bool = False,
@@ -229,6 +231,9 @@ class PenaltyOption(OptionGeneric):
             raise ValueError("derivative and explicit_derivative cannot be both True")
         self.subnodes_are_decision_states = []  # This is set by _set_subnodes_are_decision_states
         self.penalty_type = penalty_type
+        self.classification = _classification or PenaltyClassification.from_weight(weight, penalty_type)
+        if self.classification.origin != self.penalty_type:
+            raise ValueError("The penalty classification origin must match penalty_type.")
         self.is_stochastic = is_stochastic
 
         self.multi_thread = multi_thread
@@ -954,7 +959,7 @@ class PenaltyOption(OptionGeneric):
 
     def _add_penalty_to_pool(self, controller: list[PenaltyController]):
         """
-        Return the penalty pool for the specified penalty (abstract)
+        Add the penalty to the pool selected by its classification.
 
         Parameters
         ----------
@@ -962,11 +967,14 @@ class PenaltyOption(OptionGeneric):
             The penalty node elements
         """
 
-        raise RuntimeError("get_dt cannot be called from an abstract class")
+        controller = controller[0]
+        nlp = controller.get_nlp if controller is not None and controller.get_nlp else None
+        pool = self.classification.pool(self._penalty_pool_owner(controller.ocp, nlp))
+        pool[self.list_index] = self
 
     def ensure_penalty_sanity(self, ocp, nlp):
         """
-        Resets a penalty. A negative penalty index creates a new empty penalty (abstract)
+        Resets a penalty. A negative penalty index creates a new empty penalty.
 
         Parameters
         ----------
@@ -976,7 +984,16 @@ class PenaltyOption(OptionGeneric):
             A reference to the current phase of the ocp
         """
 
-        raise RuntimeError("_reset_penalty cannot be called from an abstract class")
+        from .penalty_pool import PenaltyPool
+
+        pool = self.classification.pool(self._penalty_pool_owner(ocp, nlp))
+        self.list_index = PenaltyPool.reserve_slot(pool, self.list_index)
+
+    @staticmethod
+    def _penalty_pool_owner(ocp, nlp):
+        """Return the default phase-local pool owner for a penalty."""
+
+        return nlp if nlp else ocp
 
     def get_penalty_controller(self, ocp, nlp) -> PenaltyController:
         """

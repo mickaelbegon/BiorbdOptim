@@ -5,9 +5,9 @@ from casadi import sum1, if_else, vertcat, lt, SX, MX, jacobian, Function, MX_ey
 
 from .path_conditions import Bounds
 from .penalty import PenaltyFunctionAbstract
+from .penalty_classification import PenaltyClassification
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
-from .penalty_pool import PenaltyPool
 from .weight import ConstraintWeight
 from ..misc.enums import Node, InterpolationType, PenaltyType
 from ..misc.fcn_enum import FcnEnum
@@ -90,6 +90,9 @@ class Constraint(PenaltyOption):
             custom_function=custom_function,
             is_stochastic=is_stochastic,
             weight=weight,
+            _classification=PenaltyClassification.constraint(
+                extra_parameters.get("penalty_type", PenaltyType.USER)
+            ),
             **extra_parameters,
         )
 
@@ -126,33 +129,6 @@ class Constraint(PenaltyOption):
                 self.bounds.concatenate(Bounds(None, min_bound, max_bound, interpolation=InterpolationType.CONSTANT))
         elif self.bounds.shape[0] != len(self.rows):
             raise RuntimeError(f"bounds rows is {self.bounds.shape[0]} but should be {self.rows} or empty")
-
-    def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = (
-                controller.get_nlp.g_internal
-                if controller is not None and controller.get_nlp
-                else controller.ocp.g_internal
-            )
-        elif self.penalty_type == PenaltyType.USER:
-            pool = controller.get_nlp.g if controller is not None and controller.get_nlp else controller.ocp.g
-        else:
-            raise ValueError(f"Invalid constraint type {self.penalty_type}.")
-
-        pool[self.list_index] = self
-
-    def ensure_penalty_sanity(self, ocp, nlp):
-        if self.penalty_type == PenaltyType.INTERNAL:
-            g_to_add_to = nlp.g_internal if nlp else ocp.g_internal
-        elif self.penalty_type == PenaltyType.USER:
-            g_to_add_to = nlp.g if nlp else ocp.g
-        else:
-            raise ValueError(f"Invalid Type of Constraint {self.penalty_type}")
-
-        self.list_index = PenaltyPool.reserve_slot(g_to_add_to, self.list_index)
-
 
 class ConstraintList(OptionList):
     """
@@ -945,6 +921,9 @@ class ParameterConstraint(PenaltyOption):
             quadratic=quadratic,
             custom_function=custom_function,
             weight=weight,
+            _classification=PenaltyClassification.constraint(
+                extra_parameters.get("penalty_type", PenaltyType.USER)
+            ),
             **extra_parameters,
         )
 
@@ -983,31 +962,9 @@ class ParameterConstraint(PenaltyOption):
         elif self.bounds.shape[0] != len(self.rows):
             raise RuntimeError(f"bounds rows is {self.bounds.shape[0]} but should be {self.rows} or empty")
 
-    def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = (
-                controller.get_nlp.g_internal
-                if controller is not None and controller.get_nlp
-                else controller.ocp.g_internal
-            )
-        elif self.penalty_type == PenaltyType.USER:
-            pool = controller.get_nlp.g if controller is not None and controller.get_nlp else controller.ocp.g
-        else:
-            raise ValueError(f"Invalid constraint type {self.penalty_type}.")
-
-        pool[self.list_index] = self
-
-    def ensure_penalty_sanity(self, ocp, nlp):
-        if self.penalty_type == PenaltyType.INTERNAL:
-            g_to_add_to = nlp.g_internal if nlp else ocp.g_internal
-        elif self.penalty_type == PenaltyType.USER:
-            g_to_add_to = nlp.g if nlp else ocp.g
-        else:
-            raise ValueError(f"Invalid Type of Constraint {self.penalty_type}")
-
-        self.list_index = PenaltyPool.reserve_slot(g_to_add_to, self.list_index)
+    @staticmethod
+    def _penalty_pool_owner(ocp, nlp):
+        return ocp
 
 
 class ParameterConstraintList(OptionList):

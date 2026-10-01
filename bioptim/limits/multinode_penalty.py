@@ -3,10 +3,10 @@ from typing import Callable, Any
 from casadi import MX_eye, SX_eye, jacobian, Function, MX, SX, vertcat
 
 from .objective_functions import ObjectiveFunction
+from .penalty_classification import PenaltyClassification, PenaltyNature
 from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
-from .penalty_pool import PenaltyPool
 from .weight import ObjectiveWeight, ConstraintWeight
 from ..limits.penalty_helpers import PenaltyHelpers
 from ..misc.enums import Node, PenaltyType
@@ -50,14 +50,21 @@ class MultinodePenalty(PenaltyOption):
         weight: ObjectiveWeight | ConstraintWeight,
         multinode_penalty: Any | Callable = None,
         custom_function: Callable = None,
+        _classification: PenaltyClassification | None = None,
         **extra_parameters: Any,
     ):
         if not isinstance(multinode_penalty, _multinode_penalty_fcn):
             custom_function = multinode_penalty
             multinode_penalty = _multinode_penalty_fcn.CUSTOM
 
+        extra_parameters.pop("penalty_type", None)
         super(MultinodePenalty, self).__init__(
-            penalty=multinode_penalty, custom_function=custom_function, weight=weight, **extra_parameters
+            penalty=multinode_penalty,
+            custom_function=custom_function,
+            weight=weight,
+            penalty_type=PenaltyType.INTERNAL,
+            _classification=_classification,
+            **extra_parameters,
         )
 
         for node in nodes:
@@ -83,28 +90,15 @@ class MultinodePenalty(PenaltyOption):
         self.dt = 1
         self.node_idx = [0]
         self.all_nodes_index = []  # This is filled when nodes are collapsed as actual time indices
-        self.penalty_type = PenaltyType.INTERNAL
-
         self.phase_dynamics = []  # This is set in _prepare_controller_cx
         self.ns = []  # This is set in _prepare_controller_cx
         self.control_types = []  # This is set in _prepare_controller_cx
 
-    def _get_pool_to_add_penalty(self, ocp, nlp):
-        raise NotImplementedError("This is an abstract method and should be implemented by child")
-
     def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        ocp = controller.ocp
-        nlp = controller.get_nlp
-        pool = self._get_pool_to_add_penalty(ocp, nlp)
-        pool[self.list_index] = self
+        super(MultinodePenalty, self)._add_penalty_to_pool(controller)
 
     def ensure_penalty_sanity(self, ocp, nlp):
-        pool = self._get_pool_to_add_penalty(ocp, nlp)
-
-        self.list_index = PenaltyPool.reserve_slot(pool, self.list_index)
+        super(MultinodePenalty, self).ensure_penalty_sanity(ocp, nlp)
 
 
 class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
@@ -865,7 +859,7 @@ class MultinodePenaltyList(UniquePerPhaseOptionList):
 
             mnc.name = mnc.type.name + "_" + "".join(("Multinode: ", *node_names))[:-2]
 
-            if mnc.weight:
+            if mnc.classification.nature is PenaltyNature.OBJECTIVE:
                 mnc.base = ObjectiveFunction.MayerFunction
 
             # TODO this only adds, it does not replace

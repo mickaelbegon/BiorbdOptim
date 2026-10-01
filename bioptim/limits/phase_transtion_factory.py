@@ -1,4 +1,5 @@
 from .objective_functions import ObjectiveFunction
+from .penalty_classification import PenaltyNature
 from .phase_transition import PhaseTransition, PhaseTransitionFcn, PhaseTransitionList
 from .weight import ConstraintWeight
 from ..misc.enums import ControlType
@@ -62,7 +63,7 @@ class PhaseTransitionFactory:
     def update_transition_base(self, pt):
         """Update the transition base with Mayer functions
         if the user provided a weight like for an objective function."""
-        if pt.weight:
+        if pt.classification.nature is PenaltyNature.OBJECTIVE:
             pt.base = ObjectiveFunction.MayerFunction
 
     def handle_cyclic_transition(self, idx_phase, pt):
