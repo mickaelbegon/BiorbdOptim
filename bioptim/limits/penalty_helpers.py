@@ -4,6 +4,7 @@ import numpy as np
 from casadi import MX, SX, DM, vertcat, horzcat
 
 from ..misc.enums import PhaseDynamics, ControlType, Node
+from .penalty_subnodes import Slicy, multinode_starting_indices, multinode_subnode_plan
 
 from ..misc.parameters_types import (
     Bool,
@@ -14,35 +15,6 @@ from ..misc.parameters_types import (
     NpArray,
     CXorDMorNpArray,
 )
-
-
-class Slicy:
-    """
-    More generic version of a slice object
-
-    If the subnode requests Slicy(Node.START, None), it actually does not expect the very last node (equal to starting
-    of the next node), if it needs so, it will actively ask for Slicy(Node.END, None) to get the last node.
-    When Slicy(Node.END, None) is requested, if it is in constructing phase of the penalty, it expects cx_end.
-    The Slicy(Node.END, None) will not be requested when the penalty is not being constructed (it will request
-    Slicy(Node.START, 1) of the following node instead).
-
-    When subnodes are decision states, the Slicy(Node.START, None) will return cx_start + cx_intermediates + cx_end and
-    the Slicy(Node.START, Node.PENULTIMATE) will return cx_start + cx_intermediates.
-    """
-
-    def __init__(self, start: Int | Node, stop: Int | None | Node):
-        if start == 0:
-            start = Node.START
-        self.start = start
-        self.stop = stop
-
-    def index(self) -> slice:
-        """
-        This method returns the index of the values in the slice
-        """
-        start = 0 if self.start == Node.START else self.start
-        stop = None if (self.stop == Node.END or self.stop == Node.PENULTIMATE) else self.stop
-        return slice(start, stop)
 
 
 class PenaltyProtocol(Protocol):
@@ -292,81 +264,17 @@ class PenaltyHelpers:
 
     @staticmethod
     def get_multinode_penalty_subnodes_starting_index(p: Int) -> IntList:
+        """Return the symbolic input slots for a multinode penalty.
+
+        This re-export preserves the historical ``PenaltyHelpers`` API while
+        the structural algorithm now lives in :mod:`penalty_subnodes`.
         """
-        Prepare the current_cx_to_get for each of the controller. Basically it finds if this penalty has more than
-        one usage. If it does, it increments a counter of the cx used, up to the maximum.
-        """
 
-        out = []  # The cx index of the controllers in the order of the controllers
-        share_phase_nodes = {}
-        for phase_idx, node_idx, phase_dynamics, ns in zip(p.nodes_phase, p.multinode_idx, p.phase_dynamics, p.ns):
-            # Fill the share_phase_nodes dict with the number of times a phase is used and the nodes used
-            if phase_idx not in share_phase_nodes:
-                share_phase_nodes[phase_idx] = {"nodes_used": [], "available_cx": [0, 1, 2]}
-
-            # If there is no more available, it means there is more than 3 nodes in a single phase which is not possible
-            if not share_phase_nodes[phase_idx]["available_cx"]:
-                raise ValueError(
-                    "Valid values for setting the cx is 0, 1 or 2. If you reach this error message, you probably tried "
-                    "to add more penalties than available in a multinode constraint. You can try to split the "
-                    "constraints into more penalties or use phase_dynamics=PhaseDynamics.ONE_PER_NODE"
-                )
-
-            if node_idx in share_phase_nodes[phase_idx]["nodes_used"]:
-                raise ValueError("It is not possible to constraints the same node twice")
-            share_phase_nodes[phase_idx]["nodes_used"].append(node_idx)
-
-            is_last_node = node_idx == ns
-
-            # If the phase dynamics is not shared, we can safely use cx_start all the time since the node
-            # is never the same. This allows to have arbitrary number of nodes penalties in a single phase
-            if phase_dynamics == PhaseDynamics.ONE_PER_NODE:
-                out.append(2 if is_last_node else 0)  # cx_start or cx_end
-                continue
-
-            # Pick from the start if it is not the last node
-            next_idx_to_pick = -1 if is_last_node else 0
-
-            # next_idx will always be 2 for last node since it is not possible to have twice the same node (last) in the
-            # same phase (see above)
-            next_idx = share_phase_nodes[phase_idx]["available_cx"].pop(next_idx_to_pick)
-            if is_last_node:
-                # Override to signify that cx_end should behave as last node (mostly for the controls on last node)
-                next_idx = -1
-            out.append(next_idx)
-
-        return out
+        return multinode_starting_indices(p)
 
 
 def _get_multinode_indices(penalty, is_constructing_penalty: Bool) -> IntList:
-    if not penalty.is_multinode_penalty:
-        raise RuntimeError("This function should only be called for multinode penalties")
-
-    phases = penalty.nodes_phase
-    nodes = penalty.multinode_idx
-
-    startings = PenaltyHelpers.get_multinode_penalty_subnodes_starting_index(penalty)
-    subnodes = []
-    for i_starting, starting in enumerate(startings):
-        if starting < 0:  # The last cx accessible (cx_end)
-            if is_constructing_penalty:
-                subnodes.append(Slicy(Node.END, None))
-            else:
-                subnodes.append(Slicy(Node.START, 1))
-        elif starting == 2:  # Also the last cx accessible (cx_end) since there are only 3 cx available
-            if is_constructing_penalty:
-                subnodes.append(Slicy(2, 3))
-            else:
-                subnodes.append(Slicy(Node.START, 1))
-        elif penalty.subnodes_are_decision_states[i_starting] and not penalty.is_transition:
-            if nodes[i_starting] >= penalty.ns[i_starting]:
-                subnodes.append(Slicy(Node.START, 1))
-            else:
-                subnodes.append(Slicy(Node.START, Node.END))
-        else:
-            subnodes.append(Slicy(starting, starting + 1))
-
-    return phases, nodes, subnodes
+    return multinode_subnode_plan(penalty, is_constructing_penalty)
 
 
 def _reshape_to_vector(m: CXorDMorNpArray) -> CXorDMorNpArray:

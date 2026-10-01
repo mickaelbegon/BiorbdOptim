@@ -10,7 +10,8 @@ from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocess
 from ..gui.online_callback_server import OnlineCallbackServer
 from ..limits.path_conditions import Bounds
 from ..limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
-from ..limits.penalty_helpers import PenaltyHelpers, Slicy
+from ..limits.penalty_helpers import PenaltyHelpers
+from ..limits.penalty_subnodes import Slicy
 from ..misc.enums import InterpolationType, OnlineOptim
 from ..misc.parameters_types import AnyDictOptional, Bool, AnyDict, CX, DoubleNpArrayTuple, Int
 from ..optimization.non_linear_program import NonLinearProgram

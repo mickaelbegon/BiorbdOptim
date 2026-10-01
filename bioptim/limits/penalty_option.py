@@ -8,7 +8,7 @@ from .penalty_classification import PenaltyClassification
 from .penalty_controller import PenaltyController
 from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from .penalty_nodes import PenaltyNodeResolver
-from ..limits.penalty_helpers import PenaltyHelpers, Slicy
+from ..limits.penalty_subnodes import Slicy
 from ..limits.weight import ObjectiveWeight, ConstraintWeight
 from ..misc.enums import Node, PlotType, ControlType, PenaltyType, QuadratureRule, PhaseDynamics
 from ..misc.mapping import BiMapping

@@ -8,7 +8,7 @@ from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
 from .weight import ObjectiveWeight, ConstraintWeight
-from ..limits.penalty_helpers import PenaltyHelpers
+from .penalty_subnodes import multinode_starting_indices
 from ..misc.enums import Node, PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.mapping import BiMapping
@@ -719,7 +719,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             penalty.ns = [c.get_nlp.ns for c in controllers]
             penalty.control_types = [c.get_nlp.control_type for c in controllers]
 
-            indices = PenaltyHelpers.get_multinode_penalty_subnodes_starting_index(penalty)
+            indices = multinode_starting_indices(penalty)
             for index, c in zip(indices, controllers):
                 c.cx_index_to_get = index
 
