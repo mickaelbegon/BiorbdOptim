@@ -6,6 +6,7 @@ from .objective_functions import ObjectiveFunction
 from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
+from .penalty_pool import PenaltyPool
 from .weight import ObjectiveWeight, ConstraintWeight
 from ..limits.penalty_helpers import PenaltyHelpers
 from ..misc.enums import Node, PenaltyType
@@ -103,18 +104,7 @@ class MultinodePenalty(PenaltyOption):
     def ensure_penalty_sanity(self, ocp, nlp):
         pool = self._get_pool_to_add_penalty(ocp, nlp)
 
-        if self.list_index < 0:
-            for i, j in enumerate(pool):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                pool.append([])
-                self.list_index = len(pool) - 1
-        else:
-            while self.list_index >= len(pool):
-                pool.append([])
-            pool[self.list_index] = []
+        self.list_index = PenaltyPool.reserve_slot(pool, self.list_index)
 
 
 class MultinodePenaltyFunctions(PenaltyFunctionAbstract):

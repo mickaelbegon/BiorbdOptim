@@ -3,6 +3,7 @@ from typing import Callable, Any
 from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
+from .penalty_pool import PenaltyPool
 from .weight import ObjectiveWeight
 from ..misc.enums import Node, QuadratureRule, PenaltyType
 from ..misc.fcn_enum import FcnEnum
@@ -153,19 +154,7 @@ class Objective(PenaltyOption):
         else:
             raise ValueError(f"Invalid Type of objective {self.penalty_type}")
 
-        if self.list_index < 0:
-            # Add a new one
-            for i, j in enumerate(J_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                J_to_add_to.append([])
-                self.list_index = len(J_to_add_to) - 1
-        else:
-            while self.list_index >= len(J_to_add_to):
-                J_to_add_to.append([])
-            J_to_add_to[self.list_index] = []
+        self.list_index = PenaltyPool.reserve_slot(J_to_add_to, self.list_index)
 
     def add_or_replace_to_penalty_pool(self, ocp, nlp):
         if self.type.get_type() == ObjectiveFunction.LagrangeFunction:
@@ -609,19 +598,7 @@ class ParameterObjective(PenaltyOption):
         else:
             raise ValueError(f"Invalid Type of objective {self.penalty_type}")
 
-        if self.list_index < 0:
-            # Add a new one
-            for i, j in enumerate(J_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                J_to_add_to.append([])
-                self.list_index = len(J_to_add_to) - 1
-        else:
-            while self.list_index >= len(J_to_add_to):
-                J_to_add_to.append([])
-            J_to_add_to[self.list_index] = []
+        self.list_index = PenaltyPool.reserve_slot(J_to_add_to, self.list_index)
 
     def add_or_replace_to_penalty_pool(self, ocp, nlp):
         super(ParameterObjective, self).add_or_replace_to_penalty_pool(ocp, nlp)

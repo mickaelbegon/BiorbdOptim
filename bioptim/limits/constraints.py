@@ -7,6 +7,7 @@ from .path_conditions import Bounds
 from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
+from .penalty_pool import PenaltyPool
 from .weight import ConstraintWeight
 from ..misc.enums import Node, InterpolationType, PenaltyType
 from ..misc.fcn_enum import FcnEnum
@@ -150,18 +151,7 @@ class Constraint(PenaltyOption):
         else:
             raise ValueError(f"Invalid Type of Constraint {self.penalty_type}")
 
-        if self.list_index < 0:
-            for i, j in enumerate(g_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                g_to_add_to.append([])
-                self.list_index = len(g_to_add_to) - 1
-        else:
-            while self.list_index >= len(g_to_add_to):
-                g_to_add_to.append([])
-            g_to_add_to[self.list_index] = []
+        self.list_index = PenaltyPool.reserve_slot(g_to_add_to, self.list_index)
 
 
 class ConstraintList(OptionList):
@@ -1017,18 +1007,7 @@ class ParameterConstraint(PenaltyOption):
         else:
             raise ValueError(f"Invalid Type of Constraint {self.penalty_type}")
 
-        if self.list_index < 0:
-            for i, j in enumerate(g_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                g_to_add_to.append([])
-                self.list_index = len(g_to_add_to) - 1
-        else:
-            while self.list_index >= len(g_to_add_to):
-                g_to_add_to.append([])
-            g_to_add_to[self.list_index] = []
+        self.list_index = PenaltyPool.reserve_slot(g_to_add_to, self.list_index)
 
 
 class ParameterConstraintList(OptionList):
