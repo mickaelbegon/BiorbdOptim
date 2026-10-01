@@ -1,7 +1,8 @@
 from typing import Callable, Any
 
-from .penalty import PenaltyFunctionAbstract, PenaltyOption
+from .penalty import PenaltyFunctionAbstract
 from .penalty_controller import PenaltyController
+from .penalty_option import PenaltyOption
 from .weight import ObjectiveWeight
 from ..misc.enums import Node, QuadratureRule, PenaltyType
 from ..misc.fcn_enum import FcnEnum

@@ -5,9 +5,10 @@ from casadi import vertcat, MX
 
 from .multinode_constraint import MultinodeConstraint
 from .multinode_penalty import MultinodePenalty, MultinodePenaltyFunctions
+from .penalty import PenaltyFunctionAbstract
+from .penalty_controller import PenaltyController
 from .path_conditions import Bounds
 from .weight import ObjectiveWeight, ConstraintWeight
-from ..limits.penalty import PenaltyFunctionAbstract, PenaltyController
 from ..misc.enums import Node, PenaltyType, InterpolationType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.mapping import BiMapping

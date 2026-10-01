@@ -2,10 +2,11 @@ from typing import Callable, Any
 
 from casadi import MX_eye, SX_eye, jacobian, Function, MX, SX, vertcat
 
-from .constraints import PenaltyOption
 from .objective_functions import ObjectiveFunction
+from .penalty import PenaltyFunctionAbstract
+from .penalty_controller import PenaltyController
+from .penalty_option import PenaltyOption
 from .weight import ObjectiveWeight, ConstraintWeight
-from ..limits.penalty import PenaltyFunctionAbstract, PenaltyController
 from ..limits.penalty_helpers import PenaltyHelpers
 from ..misc.enums import Node, PenaltyType
 from ..misc.fcn_enum import FcnEnum
