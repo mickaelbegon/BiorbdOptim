@@ -467,5 +467,6 @@ class PenaltyController:
             self.p,
             self.a,
             self.a_scaled,
+            self.d,
             self.node_index,
         )
