@@ -6,6 +6,7 @@ from casadi import vertcat, Function, jacobian, diag
 from ..optimization.optimization_variable import OptimizationVariableList
 from .penalty_controller import PenaltyController
 from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
+from .penalty_nodes import PenaltyNodeResolver
 from ..limits.penalty_helpers import PenaltyHelpers, Slicy
 from ..limits.weight import ObjectiveWeight, ConstraintWeight
 from ..misc.enums import Node, PlotType, ControlType, PenaltyType, QuadratureRule, PhaseDynamics
@@ -993,35 +994,9 @@ class PenaltyOption(OptionGeneric):
         The actual node (time, X and U) specified in the penalty
         """
 
-        if not isinstance(self.node, (list, tuple)):
-            self.node = (self.node,)
-
-        t_idx = []
-        for node in self.node:
-            if isinstance(node, int):
-                if node < 0 or node > nlp.ns:
-                    raise RuntimeError(f"Invalid node, {node} must be between 0 and {nlp.ns}")
-                t_idx.append(node)
-            elif node == Node.START:
-                t_idx.append(0)
-            elif node == Node.MID:
-                if nlp.ns % 2 == 1:
-                    raise ValueError("Number of shooting points must be even to use MID")
-                t_idx.append(nlp.ns // 2)
-            elif node == Node.INTERMEDIATES:
-                t_idx.extend(list(i for i in range(1, nlp.ns - 1)))
-            elif node == Node.PENULTIMATE:
-                if nlp.ns < 2:
-                    raise ValueError("Number of shooting points must be greater than 1")
-                t_idx.append(nlp.ns - 1)
-            elif node == Node.END:
-                t_idx.append(nlp.ns)
-            elif node == Node.ALL_SHOOTING:
-                t_idx.extend(range(nlp.ns))
-            elif node == Node.ALL:
-                t_idx.extend(range(nlp.ns + 1))
-            else:
-                raise RuntimeError(f"{node} is not a valid node")
+        node_plan = PenaltyNodeResolver.resolve(self.node, nlp.ns)
+        self.node = node_plan.requested_nodes
+        t_idx = list(node_plan.indices)
 
         x = [nlp.X[idx] for idx in t_idx]
         x_scaled = [nlp.X_scaled[idx] for idx in t_idx]
