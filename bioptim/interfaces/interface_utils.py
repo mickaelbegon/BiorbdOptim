@@ -9,6 +9,7 @@ from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
 from ..limits.path_conditions import Bounds
+from ..limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from ..limits.penalty_helpers import PenaltyHelpers, Slicy
 from ..misc.enums import InterpolationType, OnlineOptim
 from ..misc.parameters_types import AnyDictOptional, Bool, AnyDict, CX, DoubleNpArrayTuple, Int
@@ -483,45 +484,23 @@ def generic_get_all_penalties(
 
 
 def _get_weighted_function_inputs(penalty, penalty_idx: Int, ocp, nlp: NonLinearProgram, scaled: Bool):
-    t0 = PenaltyHelpers.t0(penalty, penalty_idx, lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx))
-
-    weight = PenaltyHelpers.weight(penalty, penalty_idx)
-    target = PenaltyHelpers.target(penalty, penalty_idx)
-
     if nlp:
-        x = PenaltyHelpers.states(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_x(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        u = PenaltyHelpers.controls(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_u(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        p = PenaltyHelpers.parameters(
-            penalty, penalty_idx, lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled)
-        )
-        a = PenaltyHelpers.states(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_a(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        d = PenaltyHelpers.numerical_timeseries(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
+        provider = PenaltyInputProvider(
+            time=lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx),
+            states=lambda p_idx, n_idx, sn_idx: _get_x(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            controls=lambda p_idx, n_idx, sn_idx: _get_u(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            parameters=lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled),
+            algebraic_states=lambda p_idx, n_idx, sn_idx: _get_a(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            numerical_timeseries=lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
         )
     else:
-        x = []
-        u = []
-        p = PenaltyHelpers.parameters(
-            penalty, penalty_idx, lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled)
+        provider = PenaltyInputProvider(
+            time=lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx),
+            parameters=lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled),
         )
-        a = []
-        d = []
 
-    return t0, x, u, p, a, d, weight, target
+    inputs = PenaltyInputResolver.resolve(penalty, penalty_idx, provider, include_weight_and_target=True)
+    return inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d, inputs.weight, inputs.target
 
 
 def _get_x(ocp, phase_idx: Int, node_idx: Int, subnodes_idx: Slicy, scaled: Bool, penalty):

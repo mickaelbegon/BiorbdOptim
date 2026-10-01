@@ -5,6 +5,7 @@ from casadi import vertcat, Function, jacobian, diag
 
 from ..optimization.optimization_variable import OptimizationVariableList
 from .penalty_controller import PenaltyController
+from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from ..limits.penalty_helpers import PenaltyHelpers, Slicy
 from ..limits.weight import ObjectiveWeight, ConstraintWeight
 from ..misc.enums import Node, PlotType, ControlType, PenaltyType, QuadratureRule, PhaseDynamics
@@ -690,37 +691,27 @@ class PenaltyOption(OptionGeneric):
         ocp = controller.ocp
         penalty_idx = self.node_idx.index(controller.node_index)
 
-        t0 = PenaltyHelpers.t0(self, penalty_idx, lambda p, n: ocp.node_time(phase_idx=p, node_idx=n))
-        x = PenaltyHelpers.states(
+        inputs = PenaltyInputResolver.resolve(
             self,
             penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_states(ocp, ocp.nlp[p_idx].states, p_idx, n_idx, sn_idx),
+            PenaltyInputProvider(
+                time=lambda p, n: ocp.node_time(phase_idx=p, node_idx=n),
+                states=lambda p_idx, n_idx, sn_idx: self._get_states(
+                    ocp, ocp.nlp[p_idx].states, p_idx, n_idx, sn_idx
+                ),
+                controls=lambda p_idx, n_idx, sn_idx: self._get_u(ocp, p_idx, n_idx, sn_idx),
+                parameters=lambda p_idx, n_idx, sn_idx: ocp.parameters.scaled.cx_start,
+                algebraic_states=lambda p_idx, n_idx, sn_idx: self._get_states(
+                    ocp, ocp.nlp[p_idx].algebraic_states, p_idx, n_idx, sn_idx
+                ),
+                numerical_timeseries=lambda p_idx, n_idx, sn_idx: self.get_numerical_timeseries(
+                    ocp, p_idx, n_idx, sn_idx
+                ),
+            ),
             is_constructing_penalty=True,
-        )
-        u = PenaltyHelpers.controls(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_u(ocp, p_idx, n_idx, sn_idx),
-            is_constructing_penalty=True,
-        )
-        p = PenaltyHelpers.parameters(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: ocp.parameters.scaled.cx_start,
-        )
-        a = PenaltyHelpers.states(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_states(ocp, ocp.nlp[p_idx].algebraic_states, p_idx, n_idx, sn_idx),
-            is_constructing_penalty=True,
-        )
-        d = PenaltyHelpers.numerical_timeseries(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self.get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
         )
 
-        return controller, t0, x, u, p, a, d
+        return controller, inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d
 
     @staticmethod
     def _get_states(ocp, states: OptimizationVariableList, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
