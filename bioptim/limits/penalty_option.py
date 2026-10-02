@@ -780,37 +780,27 @@ class PenaltyOption(OptionGeneric):
             else:
                 self.name = self.type.name
 
+        controllers = self._prepare_penalty_controllers(ocp, nlp)
+        self._compile_penalty_controllers(controllers)
+
+    def _prepare_penalty_controllers(self, ocp, nlp) -> list[PenaltyController]:
+        """Prepare the controllers for a phase-local penalty.
+
+        Multinode penalties override this hook to select controllers from their
+        respective phases. Compilation remains shared once the controllers are
+        prepared.
+        """
+
         penalty_type = self.type.get_type()
-        if self.node in [Node.MULTINODES, Node.TRANSITION]:
-            # Make sure the penalty behave like a PhaseTransition, even though it may be an Objective or Constraint
-            current_node_type = self.node
-            self.dt = 1
+        controllers = [self.get_penalty_controller(ocp, nlp)]
+        penalty_type.validate_penalty_time_index(self, controllers[0])
+        self.ensure_penalty_sanity(ocp, nlp)
+        self.dt = penalty_type.get_dt(nlp)
+        self.node_idx = controllers[0].t
+        return controllers
 
-            controllers = []
-            self.multinode_idx = []
-            for node, phase_idx in zip(self.nodes, self.nodes_phase):
-                self.node = node
-                nlp = ocp.nlp[phase_idx % ocp.n_phases]  # this is to allow using -1 to refer to the last phase
-
-                controllers.append(self.get_penalty_controller(ocp, nlp))
-                if (self.node[0] == Node.END or self.node[0] == nlp.ns) and nlp.U != []:
-                    # Make an exception to the fact that U is not available for the last node
-                    controllers[-1].u = [nlp.U[-1]]
-                penalty_type.validate_penalty_time_index(self, controllers[-1])
-                self.multinode_idx.append(controllers[-1].t[0])
-
-            # reset the node
-            self.node = current_node_type
-
-            # Finalize
-            self.ensure_penalty_sanity(ocp, controllers[0].get_nlp)
-
-        else:
-            controllers = [self.get_penalty_controller(ocp, nlp)]
-            penalty_type.validate_penalty_time_index(self, controllers[0])
-            self.ensure_penalty_sanity(ocp, nlp)
-            self.dt = penalty_type.get_dt(nlp)
-            self.node_idx = controllers[0].t
+    def _compile_penalty_controllers(self, controllers: list[PenaltyController]):
+        """Compile a penalty from its prepared controllers."""
 
         # The active controller is always the last one, and they all should be the same length anyway
         for node in range(len(controllers[-1])):

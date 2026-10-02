@@ -100,6 +100,32 @@ class MultinodePenalty(PenaltyOption):
     def ensure_penalty_sanity(self, ocp, nlp):
         super(MultinodePenalty, self).ensure_penalty_sanity(ocp, nlp)
 
+    def _prepare_penalty_controllers(self, ocp, nlp) -> list[PenaltyController]:
+        """Prepare controllers belonging to the multiple nodes of this penalty."""
+
+        current_node_type = self.node
+        self.dt = 1
+
+        controllers = []
+        self.multinode_idx = []
+        penalty_type = self.type.get_type()
+        for node, phase_idx in zip(self.nodes, self.nodes_phase):
+            self.node = node
+            phase_nlp = ocp.nlp[phase_idx % ocp.n_phases]  # this is to allow using -1 to refer to the last phase
+
+            controller = self.get_penalty_controller(ocp, phase_nlp)
+            controllers.append(controller)
+            if (self.node[0] == Node.END or self.node[0] == phase_nlp.ns) and phase_nlp.U != []:
+                # Make an exception to the fact that U is not available for the last node
+                controller.u = [phase_nlp.U[-1]]
+            penalty_type.validate_penalty_time_index(self, controller)
+            self.multinode_idx.append(controller.t[0])
+
+        # Reset the sentinel node used to distinguish multinode penalties.
+        self.node = current_node_type
+        self.ensure_penalty_sanity(ocp, controllers[0].get_nlp)
+        return controllers
+
 
 class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
     """
