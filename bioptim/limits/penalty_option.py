@@ -4,8 +4,9 @@ import numpy as np
 from casadi import vertcat, Function, jacobian, diag
 
 from ..optimization.optimization_variable import OptimizationVariableList
-from .penalty_classification import PenaltyClassification
+from .penalty_classification import PenaltyClassification, PenaltyNature
 from .penalty_controller import PenaltyController
+from .penalty_function_builder import PenaltyFunctionBuilder, PenaltyFunctionBuildContext
 from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from .penalty_nodes import PenaltyNodeResolver
 from ..limits.penalty_subnodes import Slicy
@@ -457,7 +458,6 @@ class PenaltyOption(OptionGeneric):
         # Alias some variables
         node = controller.node_index
 
-        dt = controller.dt.cx
         time = controller.time.cx
         phases_dt = controller.phases_dt.cx
 
@@ -490,147 +490,15 @@ class PenaltyOption(OptionGeneric):
             weight_cx = controller.cx.sym("weight", len(self.rows), len(self.cols))
         else:
             RuntimeError(f"weight must be a ObjectiveWeight or ConstraintWeight, not {type(self.weight)}")
-        exponent = 2 if (self.quadratic and isinstance(self.weight, ObjectiveWeight)) else 1
-
-        if is_trapezoidal:
-            # Hypothesis for APPROXIMATE_TRAPEZOIDAL: the function is continuous on states
-            # it neglects the discontinuities at the beginning of the optimization
-            param_cx_start = controller.parameters_scaled.cx
-            state_cx_start = controller.states_scaled.cx_start
-            algebraic_states_start_cx = controller.algebraic_states_scaled.cx_start
-            algebraic_states_end_cx = controller.algebraic_states_scaled.cx_end
-            numerical_timeseries_start_cx = controller.numerical_timeseries.cx_start
-            numerical_timeseries_end_cx = controller.numerical_timeseries.cx_end
-
-            # Perform the integration to get the final subnode
-            if self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL:
-                state_cx_end = controller.states_scaled.cx_end
-            elif self.integration_rule == QuadratureRule.TRAPEZOIDAL:
-                u_integrate = u.reshape((-1, 2))
-                if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                    u_integrate = u_integrate[:, 0]
-                elif self.control_types[0] in (ControlType.LINEAR_CONTINUOUS,):
-                    pass
-                else:
-                    raise NotImplementedError(f"Control type {self.control_types[0]} not implemented yet")
-
-                state_cx_end = controller.integrate(
-                    t_span=controller.t_span.cx,
-                    x0=controller.states.cx_start,
-                    u=u_integrate,
-                    p=controller.parameters.cx,
-                    a=controller.algebraic_states.cx_start,
-                    d=controller.numerical_timeseries.cx_start,
-                )["xf"]
-            else:
-                raise NotImplementedError(f"Integration rule {self.integration_rule} not implemented yet")
-
-            # to handle piecewise constant in controls we have to compute the value for the end of the interval
-            # which only relies on the value of the control at the beginning of the interval
-            control_cx_start = controller.controls_scaled.cx_start
-            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                # This effectively equates a TRAPEZOIDAL integration into a LEFT_RECTANGLE for penalties that targets
-                # controls with a constant control. This philosophically makes sense as the control is constant and
-                # applying a trapezoidal integration would be equivalent to applying a left rectangle integration
-                control_cx_end = controller.controls_scaled.cx_start
-            else:
-                if self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL:
-                    control_cx_end = controller.controls_scaled.cx_start
-                else:
-                    control_cx_end = controller.controls_scaled.cx_end
-
-            # Compute the penalty function at starting and ending of the interval
-            func_at_subnode = Function(
-                name,
-                [
-                    time,
-                    phases_dt,
-                    state_cx_start,
-                    control_cx_start,
-                    param_cx_start,
-                    algebraic_states_start_cx,
-                    numerical_timeseries_start_cx,
-                ],
-                [sub_fcn],
-            )
-            func_at_start = func_at_subnode(
-                time,
-                phases_dt,
-                state_cx_start,
-                control_cx_start,
-                param_cx_start,
-                algebraic_states_start_cx,
-                numerical_timeseries_start_cx,
-            )
-            func_at_end = func_at_subnode(
-                time + dt,
-                phases_dt,
-                state_cx_end,
-                control_cx_end,
-                param_cx_start,
-                algebraic_states_end_cx,
-                numerical_timeseries_end_cx,
-            )
-            modified_fcn = (
-                (func_at_start - target_cx[:, 0]) ** exponent + (func_at_end - target_cx[:, 1]) ** exponent
-            ) / 2
-
-            # This reimplementation is required because input sizes change. It will however produce wrong result
-            # for non weighted functions
-            self.function[node] = Function(
-                name,
-                [time, phases_dt, x, u, p, a, d],
-                [(func_at_start + func_at_end) / 2],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-        elif self.derivative:
-            # This assumes a Mayer-like penalty
-            x_start = controller.states_scaled.cx_start
-            x_end = controller.states_scaled.cx_end
-            u_start = controller.controls_scaled.cx_start
-            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                u_end = controller.controls_scaled.cx_start
-            else:
-                u_end = controller.controls_scaled.cx_end
-            p_start = controller.parameters_scaled.cx
-            a_start = controller.algebraic_states_scaled.cx_start
-            a_end = controller.algebraic_states_scaled.cx_end
-            numerical_timeseries_start = controller.numerical_timeseries.cx_start
-            numerical_timeseries_end = controller.numerical_timeseries.cx_end
-
-            fcn_tp = self.function[node] = Function(
-                name,
-                [time, phases_dt, x_start, u_start, p_start, a_start, numerical_timeseries_start],
-                [sub_fcn],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            self.function[node] = Function(
-                f"{name}",
-                [time, phases_dt, x, u, p, a, d],
-                [
-                    fcn_tp(time, phases_dt, x_end, u_end, p, a_end, numerical_timeseries_end)
-                    - fcn_tp(time, phases_dt, x_start, u_start, p, a_start, numerical_timeseries_start)
-                ],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            modified_fcn = (self.function[node](time, phases_dt, x, u, p, a, d) - target_cx) ** exponent
-
-        else:
-            # TODO Add error message if there are free variables to guide the user? For instance controls with last node
-            self.function[node] = Function(
-                name,
-                [time, phases_dt, x, u, p, a, d],
-                [sub_fcn],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            modified_fcn = (self.function[node](time, phases_dt, x, u, p, a, d) - target_cx) ** exponent
+        exponent = 2 if self.quadratic and self.classification.nature is PenaltyNature.OBJECTIVE else 1
+        build_result = PenaltyFunctionBuilder.build(
+            self,
+            controller,
+            sub_fcn,
+            PenaltyFunctionBuildContext(name, time, phases_dt, x, u, p, a, d, target_cx, exponent),
+        )
+        self.function[node] = build_result.function
+        modified_fcn = build_result.residual
 
         if self.expand:
             self.function[node] = self.function[node].expand()
