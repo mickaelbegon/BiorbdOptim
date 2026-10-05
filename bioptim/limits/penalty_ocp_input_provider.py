@@ -23,9 +23,7 @@ class OcpPenaltyInputProviderFactory:
             states=lambda phase_idx, node_idx, subnodes: cls._states(
                 ocp, ocp.nlp[phase_idx].states, phase_idx, node_idx, subnodes
             ),
-            controls=lambda phase_idx, node_idx, subnodes: cls._controls(
-                penalty, ocp, phase_idx, node_idx, subnodes
-            ),
+            controls=lambda phase_idx, node_idx, subnodes: cls._controls(penalty, ocp, phase_idx, node_idx, subnodes),
             parameters=lambda phase_idx, node_idx, subnodes: ocp.parameters.scaled.cx_start,
             algebraic_states=lambda phase_idx, node_idx, subnodes: cls._states(
                 ocp, ocp.nlp[phase_idx].algebraic_states, phase_idx, node_idx, subnodes

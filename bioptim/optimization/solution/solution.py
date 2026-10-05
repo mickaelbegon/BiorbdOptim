@@ -1331,9 +1331,7 @@ class Solution:
                 idx,
                 PenaltyInputProvider(
                     time=lambda p_idx, n_idx: self._stepwise_times[p_idx][n_idx][0],
-                    states=lambda p_idx, n_idx, sn_idx: self._get_x(
-                        self.ocp, penalty, p_idx, n_idx, sn_idx, merged_x
-                    ),
+                    states=lambda p_idx, n_idx, sn_idx: self._get_x(self.ocp, penalty, p_idx, n_idx, sn_idx, merged_x),
                     controls=lambda p_idx, n_idx, sn_idx: self._get_u(
                         self.ocp, penalty, p_idx, n_idx, sn_idx, merged_u
                     ),
@@ -1352,7 +1350,9 @@ class Solution:
 
             node_idx = penalty.node_idx[idx]
             val.append(penalty.function_non_threaded[node_idx](*inputs.function_arguments(phases_dt)))
-            val_weighted.append(penalty.weighted_function_non_threaded[node_idx](*inputs.weighted_function_arguments(phases_dt)))
+            val_weighted.append(
+                penalty.weighted_function_non_threaded[node_idx](*inputs.weighted_function_arguments(phases_dt))
+            )
 
         if self.ocp.n_threads > 1:
             val = [v[:, 0] for v in val]

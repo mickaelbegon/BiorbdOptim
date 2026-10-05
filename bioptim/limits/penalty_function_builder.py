@@ -154,9 +154,7 @@ class TrapezoidalPenaltyFunctionBuilder:
             [context.time, context.phases_dt, x_start, u_start, p_start, a_start, d_start],
             [sub_fcn],
         )
-        value_at_start = function_at_node(
-            context.time, context.phases_dt, x_start, u_start, p_start, a_start, d_start
-        )
+        value_at_start = function_at_node(context.time, context.phases_dt, x_start, u_start, p_start, a_start, d_start)
         value_at_end = function_at_node(
             context.time + controller.dt.cx,
             context.phases_dt,

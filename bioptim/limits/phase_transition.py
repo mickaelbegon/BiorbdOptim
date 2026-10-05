@@ -97,6 +97,7 @@ class PhaseTransition(MultinodePenalty):
             self: MultinodeConstraint
             MultinodeConstraint.set_bounds(self)
 
+
 class PhaseTransitionList(OptionList):
     """
     A list of PhaseTransition

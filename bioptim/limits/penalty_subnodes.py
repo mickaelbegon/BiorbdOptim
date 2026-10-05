@@ -86,9 +86,7 @@ def multinode_subnode_plan(
         elif starting == 2:
             subnodes.append(Slicy(2, 3) if is_constructing_penalty else Slicy(Node.START, 1))
         elif penalty.subnodes_are_decision_states[index] and not penalty.is_transition:
-            subnodes.append(
-                Slicy(Node.START, 1) if nodes[index] >= penalty.ns[index] else Slicy(Node.START, Node.END)
-            )
+            subnodes.append(Slicy(Node.START, 1) if nodes[index] >= penalty.ns[index] else Slicy(Node.START, Node.END))
         else:
             subnodes.append(Slicy(starting, starting + 1))
 

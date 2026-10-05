@@ -47,6 +47,7 @@ class MultinodeObjective(MultinodePenalty):
         self.base = ObjectiveFunction.MayerFunction
         self.is_stochastic = is_stochastic
 
+
 class MultinodeObjectiveList(MultinodePenaltyList):
     """
     A list of Multinode Objective

@@ -116,9 +116,7 @@ class Objective(PenaltyOption):
             custom_function=custom_function,
             is_stochastic=is_stochastic,
             weight=weight,
-            _classification=PenaltyClassification.objective(
-                extra_parameters.get("penalty_type", PenaltyType.USER)
-            ),
+            _classification=PenaltyClassification.objective(extra_parameters.get("penalty_type", PenaltyType.USER)),
             **extra_parameters,
         )
 
@@ -533,9 +531,7 @@ class ParameterObjective(PenaltyOption):
             penalty=parameter_objective,
             custom_function=custom_function,
             weight=weight,
-            _classification=PenaltyClassification.objective(
-                extra_parameters.get("penalty_type", PenaltyType.USER)
-            ),
+            _classification=PenaltyClassification.objective(extra_parameters.get("penalty_type", PenaltyType.USER)),
             **extra_parameters,
         )
 

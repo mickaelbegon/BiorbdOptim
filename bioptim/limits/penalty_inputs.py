@@ -11,7 +11,6 @@ from typing import Any, Callable
 
 from .penalty_helpers import PenaltyHelpers
 
-
 PenaltyDataGetter = Callable[[int, int, Any], Any]
 
 

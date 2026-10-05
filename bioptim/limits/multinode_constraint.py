@@ -75,6 +75,7 @@ class MultinodeConstraint(MultinodePenalty):
         elif self.bounds.shape[0] != len(self.rows):
             raise RuntimeError(f"bounds rows is {self.bounds.shape[0]} but should be {self.rows} or empty")
 
+
 class MultinodeConstraintList(MultinodePenaltyList):
     """
     A list of Multinode Constraint

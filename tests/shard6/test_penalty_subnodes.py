@@ -77,9 +77,7 @@ def test_multinode_starting_indices_preserve_the_historical_allocation(penalty, 
         (multinode_penalty(multinode_idx=[3]), False, [(Node.START, 1)]),
     ],
 )
-def test_multinode_subnode_plan_selects_symbolic_and_evaluation_subnodes(
-    penalty, is_constructing_penalty, expected
-):
+def test_multinode_subnode_plan_selects_symbolic_and_evaluation_subnodes(penalty, is_constructing_penalty, expected):
 
     phases, nodes, subnodes = multinode_subnode_plan(penalty, is_constructing_penalty)
 

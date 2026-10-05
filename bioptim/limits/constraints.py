@@ -90,9 +90,7 @@ class Constraint(PenaltyOption):
             custom_function=custom_function,
             is_stochastic=is_stochastic,
             weight=weight,
-            _classification=PenaltyClassification.constraint(
-                extra_parameters.get("penalty_type", PenaltyType.USER)
-            ),
+            _classification=PenaltyClassification.constraint(extra_parameters.get("penalty_type", PenaltyType.USER)),
             **extra_parameters,
         )
 
@@ -129,6 +127,7 @@ class Constraint(PenaltyOption):
                 self.bounds.concatenate(Bounds(None, min_bound, max_bound, interpolation=InterpolationType.CONSTANT))
         elif self.bounds.shape[0] != len(self.rows):
             raise RuntimeError(f"bounds rows is {self.bounds.shape[0]} but should be {self.rows} or empty")
+
 
 class ConstraintList(OptionList):
     """
@@ -921,9 +920,7 @@ class ParameterConstraint(PenaltyOption):
             quadratic=quadratic,
             custom_function=custom_function,
             weight=weight,
-            _classification=PenaltyClassification.constraint(
-                extra_parameters.get("penalty_type", PenaltyType.USER)
-            ),
+            _classification=PenaltyClassification.constraint(extra_parameters.get("penalty_type", PenaltyType.USER)),
             **extra_parameters,
         )
 
