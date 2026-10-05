@@ -7,6 +7,7 @@ from .weight import ConstraintWeight
 from ..misc.enums import InterpolationType, PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from .multinode_penalty import MultinodePenalty, MultinodePenaltyList, MultinodePenaltyFunctions
+from .penalty_classification import PenaltyClassification
 
 from ..misc.parameters_types import (
     Bool,
@@ -37,7 +38,12 @@ class MultinodeConstraint(MultinodePenalty):
                 raise ValueError(f"The weight must be a ConstraintWeight, int or float, not {type(weight)}")
 
         super(MultinodeConstraint, self).__init__(
-            _multinode_penalty_fcn=_multinode_penalty_fcn, nodes=nodes, nodes_phase=nodes_phase, weight=weight, **kwargs
+            _multinode_penalty_fcn=_multinode_penalty_fcn,
+            nodes=nodes,
+            nodes_phase=nodes_phase,
+            weight=weight,
+            _classification=PenaltyClassification.constraint(PenaltyType.INTERNAL),
+            **kwargs,
         )
 
         self.min_bound = min_bound
@@ -68,17 +74,6 @@ class MultinodeConstraint(MultinodePenalty):
                 self.bounds.concatenate(Bounds(None, min_bound, max_bound, interpolation=InterpolationType.CONSTANT))
         elif self.bounds.shape[0] != len(self.rows):
             raise RuntimeError(f"bounds rows is {self.bounds.shape[0]} but should be {self.rows} or empty")
-
-    def _get_pool_to_add_penalty(self, ocp, nlp):
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = nlp.g_internal if nlp else ocp.g_internal
-        elif self.penalty_type == PenaltyType.USER:
-            pool = nlp.g if nlp else ocp.g
-        else:
-            raise ValueError(f"Invalid constraint type {self.penalty_type}.")
-
-        return pool
 
 
 class MultinodeConstraintList(MultinodePenaltyList):

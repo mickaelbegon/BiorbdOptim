@@ -1,13 +1,21 @@
 from abc import abstractmethod
 from enum import Enum
 
+from ..limits.penalty_kernel import PenaltyKernelRegistry
+
 
 class FcnEnum(Enum):
     def __call__(self, *args, **kwargs):
         """
         Call the member.
         """
-        return self.value[0](*args, **kwargs)
+        return self.kernel.evaluate(*args, **kwargs)
+
+    @property
+    def kernel(self):
+        """Return the adapter for this legacy penalty function."""
+
+        return PenaltyKernelRegistry.resolve(self)
 
     @staticmethod
     @abstractmethod

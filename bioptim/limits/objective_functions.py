@@ -1,7 +1,9 @@
 from typing import Callable, Any
 
-from .penalty import PenaltyFunctionAbstract, PenaltyOption
+from .penalty import PenaltyFunctionAbstract
+from .penalty_classification import PenaltyClassification
 from .penalty_controller import PenaltyController
+from .penalty_option import PenaltyOption
 from .weight import ObjectiveWeight
 from ..misc.enums import Node, QuadratureRule, PenaltyType
 from ..misc.fcn_enum import FcnEnum
@@ -114,57 +116,9 @@ class Objective(PenaltyOption):
             custom_function=custom_function,
             is_stochastic=is_stochastic,
             weight=weight,
+            _classification=PenaltyClassification.objective(extra_parameters.get("penalty_type", PenaltyType.USER)),
             **extra_parameters,
         )
-
-    def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = (
-                controller.get_nlp.J_internal
-                if controller is not None and controller.get_nlp
-                else controller.ocp.J_internal
-            )
-        elif self.penalty_type == PenaltyType.USER:
-            pool = controller.get_nlp.J if controller is not None and controller.get_nlp else controller.ocp.J
-        else:
-            raise ValueError(f"Invalid objective type {self.penalty_type}.")
-
-        pool[self.list_index] = self
-
-    def ensure_penalty_sanity(self, ocp, nlp):
-        """
-        Resets an objective function. A negative penalty index creates a new empty objective function.
-
-        Parameters
-        ----------
-        ocp: OptimalControlProgram
-            A reference to the ocp
-        nlp: NonLinearProgram
-            A reference to the current phase of the ocp
-        """
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            J_to_add_to = nlp.J_internal if nlp else ocp.J_internal
-        elif self.penalty_type == PenaltyType.USER:
-            J_to_add_to = nlp.J if nlp else ocp.J
-        else:
-            raise ValueError(f"Invalid Type of objective {self.penalty_type}")
-
-        if self.list_index < 0:
-            # Add a new one
-            for i, j in enumerate(J_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                J_to_add_to.append([])
-                self.list_index = len(J_to_add_to) - 1
-        else:
-            while self.list_index >= len(J_to_add_to):
-                J_to_add_to.append([])
-            J_to_add_to[self.list_index] = []
 
     def add_or_replace_to_penalty_pool(self, ocp, nlp):
         if self.type.get_type() == ObjectiveFunction.LagrangeFunction:
@@ -416,6 +370,7 @@ class ObjectiveFcn:
         TRACK_SEGMENT_WITH_CUSTOM_RT = (PenaltyFunctionAbstract.Functions.track_segment_with_custom_rt,)
         TRACK_SOFT_CONTACT_FORCES = (PenaltyFunctionAbstract.Functions.minimize_soft_contact_forces,)
         TRACK_STATE = (PenaltyFunctionAbstract.Functions.minimize_states,)
+        TRACK_ALGEBRAIC_STATES = (PenaltyFunctionAbstract.Functions.minimize_algebraic_states,)
 
         @staticmethod
         def get_type() -> Callable:
@@ -455,6 +410,7 @@ class ObjectiveFcn:
         MINIMIZE_TIME = (ObjectiveFunction.MayerFunction.Functions.minimize_time,)
         PROPORTIONAL_STATE = (PenaltyFunctionAbstract.Functions.proportional_states,)
         MINIMIZE_ALGEBRAIC_STATE = (PenaltyFunctionAbstract.Functions.minimize_algebraic_states,)
+        TRACK_ALGEBRAIC_STATE = (PenaltyFunctionAbstract.Functions.minimize_algebraic_states,)
         SUPERIMPOSE_MARKERS = (PenaltyFunctionAbstract.Functions.superimpose_markers,)
         SUPERIMPOSE_MARKERS_VELOCITY = (PenaltyFunctionAbstract.Functions.superimpose_markers_velocity,)
         TRACK_MARKER_WITH_SEGMENT_AXIS = (PenaltyFunctionAbstract.Functions.track_marker_with_segment_axis,)
@@ -572,53 +528,16 @@ class ParameterObjective(PenaltyOption):
                 raise ValueError(f"The weight must be a ObjectiveWeight, int or float, not {type(weight)}")
 
         super(ParameterObjective, self).__init__(
-            penalty=parameter_objective, custom_function=custom_function, weight=weight, **extra_parameters
+            penalty=parameter_objective,
+            custom_function=custom_function,
+            weight=weight,
+            _classification=PenaltyClassification.objective(extra_parameters.get("penalty_type", PenaltyType.USER)),
+            **extra_parameters,
         )
 
-    def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = controller.ocp.J_internal
-        elif self.penalty_type == PenaltyType.USER:
-            pool = controller.ocp.J
-        else:
-            raise ValueError(f"Invalid objective type {self.penalty_type}.")
-
-        pool[self.list_index] = self
-
-    def ensure_penalty_sanity(self, ocp, nlp):
-        """
-        Resets a objective function. A negative penalty index creates a new empty objective function.
-
-        Parameters
-        ----------
-        ocp: OptimalControlProgram
-            A reference to the ocp
-        nlp: NonLinearProgram
-            A reference to the current phase of the ocp
-        """
-
-        if self.penalty_type == PenaltyType.INTERNAL:
-            J_to_add_to = ocp.J_internal
-        elif self.penalty_type == PenaltyType.USER:
-            J_to_add_to = ocp.J
-        else:
-            raise ValueError(f"Invalid Type of objective {self.penalty_type}")
-
-        if self.list_index < 0:
-            # Add a new one
-            for i, j in enumerate(J_to_add_to):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                J_to_add_to.append([])
-                self.list_index = len(J_to_add_to) - 1
-        else:
-            while self.list_index >= len(J_to_add_to):
-                J_to_add_to.append([])
-            J_to_add_to[self.list_index] = []
+    @staticmethod
+    def _penalty_pool_owner(ocp, nlp):
+        return ocp
 
     def add_or_replace_to_penalty_pool(self, ocp, nlp):
         super(ParameterObjective, self).add_or_replace_to_penalty_pool(ocp, nlp)

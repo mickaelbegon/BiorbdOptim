@@ -3,11 +3,14 @@ from typing import Any, Callable
 import numpy as np
 from casadi import vertcat, Function, jacobian, diag
 
-from ..optimization.optimization_variable import OptimizationVariableList
+from .penalty_classification import PenaltyClassification, PenaltyNature
 from .penalty_controller import PenaltyController
-from ..limits.penalty_helpers import PenaltyHelpers, Slicy
+from .penalty_function_builder import PenaltyFunctionBuilder, PenaltyFunctionBuildContext
+from .penalty_inputs import PenaltyConstructionContext, PenaltyInputResolver
+from .penalty_nodes import PenaltyNodeResolver
+from .penalty_ocp_input_provider import OcpPenaltyInputProviderFactory
 from ..limits.weight import ObjectiveWeight, ConstraintWeight
-from ..misc.enums import Node, PlotType, ControlType, PenaltyType, QuadratureRule, PhaseDynamics
+from ..misc.enums import Node, PlotType, PenaltyType, QuadratureRule, PhaseDynamics
 from ..misc.mapping import BiMapping
 from ..misc.options import OptionGeneric
 from ..models.protocols.stochastic_biomodel import StochasticBioModel
@@ -95,9 +98,9 @@ class PenaltyOption(OptionGeneric):
     add_or_replace_to_penalty_pool(self, ocp, nlp)
         Doing some configuration on the penalty and add it to the list of penalty
     _add_penalty_to_pool(self, controller: list[PenaltyController])
-        Return the penalty pool for the specified penalty (abstract)
+        Add the penalty to its classified pool
     ensure_penalty_sanity(self, ocp, nlp)
-        Resets a penalty. A negative penalty index creates a new empty penalty (abstract)
+        Resets a penalty. A negative penalty index creates a new empty penalty
     _get_penalty_node_list(self, ocp, nlp) -> PenaltyController
         Get the actual node (time, X and U) specified in the penalty
     """
@@ -119,6 +122,7 @@ class PenaltyOption(OptionGeneric):
         cols: AnySequenceOptional = None,
         custom_function: Callable = None,
         penalty_type: PenaltyType = PenaltyType.USER,
+        _classification: PenaltyClassification | None = None,
         is_stochastic: Bool = False,
         multi_thread: Bool = None,
         expand: Bool = False,
@@ -227,6 +231,9 @@ class PenaltyOption(OptionGeneric):
             raise ValueError("derivative and explicit_derivative cannot be both True")
         self.subnodes_are_decision_states = []  # This is set by _set_subnodes_are_decision_states
         self.penalty_type = penalty_type
+        self.classification = _classification or PenaltyClassification.from_weight(weight, penalty_type)
+        if self.classification.origin != self.penalty_type:
+            raise ValueError("The penalty classification origin must match penalty_type.")
         self.is_stochastic = is_stochastic
 
         self.multi_thread = multi_thread
@@ -450,7 +457,6 @@ class PenaltyOption(OptionGeneric):
         # Alias some variables
         node = controller.node_index
 
-        dt = controller.dt.cx
         time = controller.time.cx
         phases_dt = controller.phases_dt.cx
 
@@ -483,147 +489,15 @@ class PenaltyOption(OptionGeneric):
             weight_cx = controller.cx.sym("weight", len(self.rows), len(self.cols))
         else:
             RuntimeError(f"weight must be a ObjectiveWeight or ConstraintWeight, not {type(self.weight)}")
-        exponent = 2 if (self.quadratic and isinstance(self.weight, ObjectiveWeight)) else 1
-
-        if is_trapezoidal:
-            # Hypothesis for APPROXIMATE_TRAPEZOIDAL: the function is continuous on states
-            # it neglects the discontinuities at the beginning of the optimization
-            param_cx_start = controller.parameters_scaled.cx
-            state_cx_start = controller.states_scaled.cx_start
-            algebraic_states_start_cx = controller.algebraic_states_scaled.cx_start
-            algebraic_states_end_cx = controller.algebraic_states_scaled.cx_end
-            numerical_timeseries_start_cx = controller.numerical_timeseries.cx_start
-            numerical_timeseries_end_cx = controller.numerical_timeseries.cx_end
-
-            # Perform the integration to get the final subnode
-            if self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL:
-                state_cx_end = controller.states_scaled.cx_end
-            elif self.integration_rule == QuadratureRule.TRAPEZOIDAL:
-                u_integrate = u.reshape((-1, 2))
-                if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                    u_integrate = u_integrate[:, 0]
-                elif self.control_types[0] in (ControlType.LINEAR_CONTINUOUS,):
-                    pass
-                else:
-                    raise NotImplementedError(f"Control type {self.control_types[0]} not implemented yet")
-
-                state_cx_end = controller.integrate(
-                    t_span=controller.t_span.cx,
-                    x0=controller.states.cx_start,
-                    u=u_integrate,
-                    p=controller.parameters.cx,
-                    a=controller.algebraic_states.cx_start,
-                    d=controller.numerical_timeseries.cx_start,
-                )["xf"]
-            else:
-                raise NotImplementedError(f"Integration rule {self.integration_rule} not implemented yet")
-
-            # to handle piecewise constant in controls we have to compute the value for the end of the interval
-            # which only relies on the value of the control at the beginning of the interval
-            control_cx_start = controller.controls_scaled.cx_start
-            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                # This effectively equates a TRAPEZOIDAL integration into a LEFT_RECTANGLE for penalties that targets
-                # controls with a constant control. This philosophically makes sense as the control is constant and
-                # applying a trapezoidal integration would be equivalent to applying a left rectangle integration
-                control_cx_end = controller.controls_scaled.cx_start
-            else:
-                if self.integration_rule == QuadratureRule.APPROXIMATE_TRAPEZOIDAL:
-                    control_cx_end = controller.controls_scaled.cx_start
-                else:
-                    control_cx_end = controller.controls_scaled.cx_end
-
-            # Compute the penalty function at starting and ending of the interval
-            func_at_subnode = Function(
-                name,
-                [
-                    time,
-                    phases_dt,
-                    state_cx_start,
-                    control_cx_start,
-                    param_cx_start,
-                    algebraic_states_start_cx,
-                    numerical_timeseries_start_cx,
-                ],
-                [sub_fcn],
-            )
-            func_at_start = func_at_subnode(
-                time,
-                phases_dt,
-                state_cx_start,
-                control_cx_start,
-                param_cx_start,
-                algebraic_states_start_cx,
-                numerical_timeseries_start_cx,
-            )
-            func_at_end = func_at_subnode(
-                time + dt,
-                phases_dt,
-                state_cx_end,
-                control_cx_end,
-                param_cx_start,
-                algebraic_states_end_cx,
-                numerical_timeseries_end_cx,
-            )
-            modified_fcn = (
-                (func_at_start - target_cx[:, 0]) ** exponent + (func_at_end - target_cx[:, 1]) ** exponent
-            ) / 2
-
-            # This reimplementation is required because input sizes change. It will however produce wrong result
-            # for non weighted functions
-            self.function[node] = Function(
-                name,
-                [time, phases_dt, x, u, p, a, d],
-                [(func_at_start + func_at_end) / 2],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-        elif self.derivative:
-            # This assumes a Mayer-like penalty
-            x_start = controller.states_scaled.cx_start
-            x_end = controller.states_scaled.cx_end
-            u_start = controller.controls_scaled.cx_start
-            if self.control_types[0] in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                u_end = controller.controls_scaled.cx_start
-            else:
-                u_end = controller.controls_scaled.cx_end
-            p_start = controller.parameters_scaled.cx
-            a_start = controller.algebraic_states_scaled.cx_start
-            a_end = controller.algebraic_states_scaled.cx_end
-            numerical_timeseries_start = controller.numerical_timeseries.cx_start
-            numerical_timeseries_end = controller.numerical_timeseries.cx_end
-
-            fcn_tp = self.function[node] = Function(
-                name,
-                [time, phases_dt, x_start, u_start, p_start, a_start, numerical_timeseries_start],
-                [sub_fcn],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            self.function[node] = Function(
-                f"{name}",
-                [time, phases_dt, x, u, p, a, d],
-                [
-                    fcn_tp(time, phases_dt, x_end, u_end, p, a_end, numerical_timeseries_end)
-                    - fcn_tp(time, phases_dt, x_start, u_start, p, a_start, numerical_timeseries_start)
-                ],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            modified_fcn = (self.function[node](time, phases_dt, x, u, p, a, d) - target_cx) ** exponent
-
-        else:
-            # TODO Add error message if there are free variables to guide the user? For instance controls with last node
-            self.function[node] = Function(
-                name,
-                [time, phases_dt, x, u, p, a, d],
-                [sub_fcn],
-                ["t", "dt", "x", "u", "p", "a", "d"],
-                ["val"],
-            )
-
-            modified_fcn = (self.function[node](time, phases_dt, x, u, p, a, d) - target_cx) ** exponent
+        exponent = 2 if self.quadratic and self.classification.nature is PenaltyNature.OBJECTIVE else 1
+        build_result = PenaltyFunctionBuilder.build(
+            self,
+            controller,
+            sub_fcn,
+            PenaltyFunctionBuildContext(name, time, phases_dt, x, u, p, a, d, target_cx, exponent),
+        )
+        self.function[node] = build_result.function
+        modified_fcn = build_result.residual
 
         if self.expand:
             self.function[node] = self.function[node].expand()
@@ -674,169 +548,30 @@ class PenaltyOption(OptionGeneric):
             )
 
     def get_variable_inputs(self, controllers: list[PenaltyController]):
+        """Return the legacy symbolic input tuple for the active controller."""
+
+        context = self._prepare_construction_context(controllers)
+        inputs = PenaltyInputResolver.resolve(
+            self,
+            context.penalty_idx,
+            OcpPenaltyInputProviderFactory.build(self, context.controller.ocp),
+            is_constructing_penalty=True,
+        )
+
+        return context.controller, inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d
+
+    def _prepare_construction_context(self, controllers: list[PenaltyController]) -> PenaltyConstructionContext:
+        """Select the controller and penalty position used for symbolic construction."""
+
         if self.is_multinode_penalty:
             controller = controllers[0]  # Recast controller as a normal variable (instead of a list)
             self.node_idx[0] = controller.node_index
-
-            self.all_nodes_index = []
-            for ctrl in controllers:
-                self.all_nodes_index.extend(ctrl.t)
-
+            self.all_nodes_index = [node_idx for ctrl in controllers for node_idx in ctrl.t]
         else:
             controller = controllers[0]
 
         self._check_sanity_of_penalty_interactions(controller)
-
-        ocp = controller.ocp
-        penalty_idx = self.node_idx.index(controller.node_index)
-
-        t0 = PenaltyHelpers.t0(self, penalty_idx, lambda p, n: ocp.node_time(phase_idx=p, node_idx=n))
-        x = PenaltyHelpers.states(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_states(ocp, ocp.nlp[p_idx].states, p_idx, n_idx, sn_idx),
-            is_constructing_penalty=True,
-        )
-        u = PenaltyHelpers.controls(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_u(ocp, p_idx, n_idx, sn_idx),
-            is_constructing_penalty=True,
-        )
-        p = PenaltyHelpers.parameters(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: ocp.parameters.scaled.cx_start,
-        )
-        a = PenaltyHelpers.states(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self._get_states(ocp, ocp.nlp[p_idx].algebraic_states, p_idx, n_idx, sn_idx),
-            is_constructing_penalty=True,
-        )
-        d = PenaltyHelpers.numerical_timeseries(
-            self,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: self.get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
-        )
-
-        return controller, t0, x, u, p, a, d
-
-    @staticmethod
-    def _get_states(ocp, states: OptimizationVariableList, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        states.node_index = n_idx
-
-        x = ocp.cx()
-        if states.scaled.cx_start.shape == (0, 0):
-            return x
-
-        if sn_idx.start == Node.START:
-            x = vertcat(x, states.scaled.cx_start)
-            if sn_idx.stop == 1:
-                pass
-            elif sn_idx.stop == Node.PENULTIMATE:
-                if n_idx < ocp.nlp[p_idx].ns + 1:
-                    x = vertcat(x, vertcat(*states.scaled.cx_intermediates_list))
-            elif sn_idx.stop == Node.END:
-                if n_idx < ocp.nlp[p_idx].ns + 1:
-                    x = vertcat(vertcat(x, vertcat(*states.scaled.cx_intermediates_list)), states.scaled.cx_end)
-            else:
-                raise ValueError("The sn_idx.stop should be 1 or None if sn_idx.start == 0")
-
-        elif sn_idx.start == 1:
-            if sn_idx.stop == 2:
-                x = vertcat(x, vertcat(states.scaled.cx_mid))
-            else:
-                raise ValueError("The sn_idx.stop should be 2 if sn_idx.start == 1")
-
-        elif sn_idx.start == 2:
-            if sn_idx.stop == 3:
-                x = vertcat(x, vertcat(states.scaled.cx_end))
-            else:
-                raise ValueError("The sn_idx.stop should be 3 if sn_idx.start == 2")
-
-        elif sn_idx.start == Node.END:
-            x = vertcat(x, vertcat(states.scaled.cx_end))
-            if sn_idx.stop is not None:
-                raise ValueError("The sn_idx.stop should be None if sn_idx.start == -1")
-
-        else:
-            raise ValueError(f"The sn_idx.start {sn_idx.start} not recognized.")
-
-        return x
-
-    def _get_u(self, ocp, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        nlp = ocp.nlp[p_idx]
-        controls = nlp.controls
-        controls.node_index = n_idx
-
-        def vertcat_cx_end():
-            if nlp.control_type in (ControlType.LINEAR_CONTINUOUS,):
-                return vertcat(u, controls.scaled.cx_end)
-            elif nlp.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                if n_idx < nlp.n_controls_nodes - 1:
-                    return vertcat(u, controls.scaled.cx_end)
-
-                elif n_idx == nlp.n_controls_nodes - 1:
-                    # If we are at the penultimate node, we still can use the cx_end, unless we are
-                    # performing some kind of integration or derivative and this last node does not exist
-                    if nlp.control_type in (ControlType.CONSTANT_WITH_LAST_NODE,):
-                        return vertcat(u, controls.scaled.cx_end)
-                    if self.integrate or self.derivative or self.explicit_derivative or self.is_multinode_penalty:
-                        return u
-                    else:
-                        return vertcat(u, controls.scaled.cx_end)
-
-                else:
-                    return u
-            else:
-                raise NotImplementedError(f"Control type {nlp.control_type} not implemented yet")
-
-        u = ocp.cx()
-        if sn_idx.start == Node.START:
-            u = vertcat(u, controls.scaled.cx_start)
-            if sn_idx.stop == 1:
-                pass
-            elif sn_idx.stop == Node.PENULTIMATE or sn_idx.stop == Node.END:
-                u = vertcat_cx_end()
-            else:
-                raise ValueError(f"The sn_idx.stop {sn_idx.stop} was not recognized.")
-
-        elif sn_idx.start == 1:
-            if sn_idx.stop == 2:
-                u = vertcat(u, controls.scaled.cx_mid)
-            else:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-
-        elif sn_idx.start == 2:
-            # This is not the actual endpoint but a midpoint that must use cx_end
-            if sn_idx.stop == 3:
-                u = vertcat(u, controls.scaled.cx_end)
-            else:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-
-        elif sn_idx.start == Node.END:
-            if sn_idx.stop is not None:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-            u = vertcat_cx_end()
-
-        else:
-            raise ValueError(f"The sn_idx.start {sn_idx.start} not recognized.")
-
-        return u
-
-    def get_numerical_timeseries(self, ocp, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        nlp = ocp.nlp[p_idx]
-        numerical_timeseries = nlp.numerical_timeseries
-
-        if numerical_timeseries.cx_start.shape == (0, 0):
-            return ocp.cx()
-        elif sn_idx.start == Node.START:
-            return numerical_timeseries.cx_start
-        elif sn_idx.start == Node.END:
-            return numerical_timeseries.cx_end
-        else:
-            raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
+        return PenaltyConstructionContext(controller, self.node_idx.index(controller.node_index))
 
     @staticmethod
     def define_target_mapping(controller: PenaltyController, key: Str, rows):
@@ -915,37 +650,27 @@ class PenaltyOption(OptionGeneric):
             else:
                 self.name = self.type.name
 
+        controllers = self._prepare_penalty_controllers(ocp, nlp)
+        self._compile_penalty_controllers(controllers)
+
+    def _prepare_penalty_controllers(self, ocp, nlp) -> list[PenaltyController]:
+        """Prepare the controllers for a phase-local penalty.
+
+        Multinode penalties override this hook to select controllers from their
+        respective phases. Compilation remains shared once the controllers are
+        prepared.
+        """
+
         penalty_type = self.type.get_type()
-        if self.node in [Node.MULTINODES, Node.TRANSITION]:
-            # Make sure the penalty behave like a PhaseTransition, even though it may be an Objective or Constraint
-            current_node_type = self.node
-            self.dt = 1
+        controllers = [self.get_penalty_controller(ocp, nlp)]
+        penalty_type.validate_penalty_time_index(self, controllers[0])
+        self.ensure_penalty_sanity(ocp, nlp)
+        self.dt = penalty_type.get_dt(nlp)
+        self.node_idx = controllers[0].t
+        return controllers
 
-            controllers = []
-            self.multinode_idx = []
-            for node, phase_idx in zip(self.nodes, self.nodes_phase):
-                self.node = node
-                nlp = ocp.nlp[phase_idx % ocp.n_phases]  # this is to allow using -1 to refer to the last phase
-
-                controllers.append(self.get_penalty_controller(ocp, nlp))
-                if (self.node[0] == Node.END or self.node[0] == nlp.ns) and nlp.U != []:
-                    # Make an exception to the fact that U is not available for the last node
-                    controllers[-1].u = [nlp.U[-1]]
-                penalty_type.validate_penalty_time_index(self, controllers[-1])
-                self.multinode_idx.append(controllers[-1].t[0])
-
-            # reset the node
-            self.node = current_node_type
-
-            # Finalize
-            self.ensure_penalty_sanity(ocp, controllers[0].get_nlp)
-
-        else:
-            controllers = [self.get_penalty_controller(ocp, nlp)]
-            penalty_type.validate_penalty_time_index(self, controllers[0])
-            self.ensure_penalty_sanity(ocp, nlp)
-            self.dt = penalty_type.get_dt(nlp)
-            self.node_idx = controllers[0].t
+    def _compile_penalty_controllers(self, controllers: list[PenaltyController]):
+        """Compile a penalty from its prepared controllers."""
 
         # The active controller is always the last one, and they all should be the same length anyway
         for node in range(len(controllers[-1])):
@@ -954,7 +679,7 @@ class PenaltyOption(OptionGeneric):
                 controller.node_index = controller.t[node]
                 controller.cx_index_to_get = 0
 
-            penalty_function = self.type(
+            penalty_function = self.type.kernel.evaluate(
                 self, controllers if len(controllers) > 1 else controllers[0], **self.extra_parameters
             )
 
@@ -962,7 +687,7 @@ class PenaltyOption(OptionGeneric):
 
     def _add_penalty_to_pool(self, controller: list[PenaltyController]):
         """
-        Return the penalty pool for the specified penalty (abstract)
+        Add the penalty to the pool selected by its classification.
 
         Parameters
         ----------
@@ -970,11 +695,14 @@ class PenaltyOption(OptionGeneric):
             The penalty node elements
         """
 
-        raise RuntimeError("get_dt cannot be called from an abstract class")
+        controller = controller[0]
+        nlp = controller.get_nlp if controller is not None and controller.get_nlp else None
+        pool = self.classification.pool(self._penalty_pool_owner(controller.ocp, nlp))
+        pool[self.list_index] = self
 
     def ensure_penalty_sanity(self, ocp, nlp):
         """
-        Resets a penalty. A negative penalty index creates a new empty penalty (abstract)
+        Resets a penalty. A negative penalty index creates a new empty penalty.
 
         Parameters
         ----------
@@ -984,7 +712,16 @@ class PenaltyOption(OptionGeneric):
             A reference to the current phase of the ocp
         """
 
-        raise RuntimeError("_reset_penalty cannot be called from an abstract class")
+        from .penalty_pool import PenaltyPool
+
+        pool = self.classification.pool(self._penalty_pool_owner(ocp, nlp))
+        self.list_index = PenaltyPool.reserve_slot(pool, self.list_index)
+
+    @staticmethod
+    def _penalty_pool_owner(ocp, nlp):
+        """Return the default phase-local pool owner for a penalty."""
+
+        return nlp if nlp else ocp
 
     def get_penalty_controller(self, ocp, nlp) -> PenaltyController:
         """
@@ -1002,35 +739,9 @@ class PenaltyOption(OptionGeneric):
         The actual node (time, X and U) specified in the penalty
         """
 
-        if not isinstance(self.node, (list, tuple)):
-            self.node = (self.node,)
-
-        t_idx = []
-        for node in self.node:
-            if isinstance(node, int):
-                if node < 0 or node > nlp.ns:
-                    raise RuntimeError(f"Invalid node, {node} must be between 0 and {nlp.ns}")
-                t_idx.append(node)
-            elif node == Node.START:
-                t_idx.append(0)
-            elif node == Node.MID:
-                if nlp.ns % 2 == 1:
-                    raise ValueError("Number of shooting points must be even to use MID")
-                t_idx.append(nlp.ns // 2)
-            elif node == Node.INTERMEDIATES:
-                t_idx.extend(list(i for i in range(1, nlp.ns - 1)))
-            elif node == Node.PENULTIMATE:
-                if nlp.ns < 2:
-                    raise ValueError("Number of shooting points must be greater than 1")
-                t_idx.append(nlp.ns - 1)
-            elif node == Node.END:
-                t_idx.append(nlp.ns)
-            elif node == Node.ALL_SHOOTING:
-                t_idx.extend(range(nlp.ns))
-            elif node == Node.ALL:
-                t_idx.extend(range(nlp.ns + 1))
-            else:
-                raise RuntimeError(f"{node} is not a valid node")
+        node_plan = PenaltyNodeResolver.resolve(self.node, nlp.ns)
+        self.node = node_plan.requested_nodes
+        t_idx = list(node_plan.indices)
 
         x = [nlp.X[idx] for idx in t_idx]
         x_scaled = [nlp.X_scaled[idx] for idx in t_idx]

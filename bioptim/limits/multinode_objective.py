@@ -4,6 +4,7 @@ from ..misc.enums import PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from .multinode_penalty import MultinodePenalty, MultinodePenaltyList, MultinodePenaltyFunctions
 from .objective_functions import ObjectiveFunction
+from .penalty_classification import PenaltyClassification
 from .weight import ObjectiveWeight
 
 
@@ -34,22 +35,17 @@ class MultinodeObjective(MultinodePenalty):
                 raise ValueError(f"The weight must be a ObjectiveWeight, int or float, not {type(weight)}")
 
         super(MultinodeObjective, self).__init__(
-            _multinode_penalty_fcn=_multinode_penalty_fcn, nodes=nodes, nodes_phase=nodes_phase, weight=weight, **kwargs
+            _multinode_penalty_fcn=_multinode_penalty_fcn,
+            nodes=nodes,
+            nodes_phase=nodes_phase,
+            weight=weight,
+            _classification=PenaltyClassification.objective(PenaltyType.INTERNAL),
+            **kwargs,
         )
 
         self.quadratic = kwargs["quadratic"] if "quadratic" in kwargs else True
         self.base = ObjectiveFunction.MayerFunction
         self.is_stochastic = is_stochastic
-
-    def _get_pool_to_add_penalty(self, ocp, nlp):
-        if self.penalty_type == PenaltyType.INTERNAL:
-            pool = nlp.J_internal if nlp else ocp.J_internal
-        elif self.penalty_type == PenaltyType.USER:
-            pool = nlp.J if nlp else ocp.J
-        else:
-            raise ValueError(f"Invalid objective type {self.penalty_type}.")
-
-        return pool
 
 
 class MultinodeObjectiveList(MultinodePenaltyList):

@@ -1,3 +1,4 @@
+import platform
 from time import perf_counter
 
 from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX, MX, DM, reshape, jacobian
@@ -8,7 +9,9 @@ from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
 from ..limits.path_conditions import Bounds
-from ..limits.penalty_helpers import PenaltyHelpers, Slicy
+from ..limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
+from ..limits.penalty_helpers import PenaltyHelpers
+from ..limits.penalty_subnodes import Slicy
 from ..misc.enums import InterpolationType, OnlineOptim
 from ..misc.parameters_types import AnyDictOptional, Bool, AnyDict, CX, DoubleNpArrayTuple, Int
 from ..optimization.non_linear_program import NonLinearProgram
@@ -37,7 +40,14 @@ def generic_online_optim(interface: SolverInterface, ocp, show_options: AnyDictO
     online_optim = interface.opts.online_optim.get_default()
     if online_optim is None:
         return
-    elif online_optim == OnlineOptim.MULTIPROCESS:
+    if platform.system() == "Darwin" and online_optim == OnlineOptim.MULTIPROCESS:
+        raise NotImplementedError(
+            "online_optim MULTIPROCESS is not available on macOS. "
+            "Use OnlineOptim.MULTIPROCESS_SERVER for automatic plotting or OnlineOptim.SERVER with a manually started "
+            "PlottingServer."
+        )
+
+    if online_optim == OnlineOptim.MULTIPROCESS:
         to_call = OnlineCallbackMultiprocess
     elif online_optim == OnlineOptim.SERVER:
         to_call = OnlineCallbackServer
@@ -475,45 +485,23 @@ def generic_get_all_penalties(
 
 
 def _get_weighted_function_inputs(penalty, penalty_idx: Int, ocp, nlp: NonLinearProgram, scaled: Bool):
-    t0 = PenaltyHelpers.t0(penalty, penalty_idx, lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx))
-
-    weight = PenaltyHelpers.weight(penalty, penalty_idx)
-    target = PenaltyHelpers.target(penalty, penalty_idx)
-
     if nlp:
-        x = PenaltyHelpers.states(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_x(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        u = PenaltyHelpers.controls(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_u(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        p = PenaltyHelpers.parameters(
-            penalty, penalty_idx, lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled)
-        )
-        a = PenaltyHelpers.states(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: _get_a(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
-        )
-        d = PenaltyHelpers.numerical_timeseries(
-            penalty,
-            penalty_idx,
-            lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
+        provider = PenaltyInputProvider(
+            time=lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx),
+            states=lambda p_idx, n_idx, sn_idx: _get_x(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            controls=lambda p_idx, n_idx, sn_idx: _get_u(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            parameters=lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled),
+            algebraic_states=lambda p_idx, n_idx, sn_idx: _get_a(ocp, p_idx, n_idx, sn_idx, scaled, penalty),
+            numerical_timeseries=lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(ocp, p_idx, n_idx, sn_idx),
         )
     else:
-        x = []
-        u = []
-        p = PenaltyHelpers.parameters(
-            penalty, penalty_idx, lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled)
+        provider = PenaltyInputProvider(
+            time=lambda p_idx, n_idx: ocp.node_time(phase_idx=p_idx, node_idx=n_idx),
+            parameters=lambda p_idx, n_idx, sn_idx: _get_p(ocp, p_idx, n_idx, sn_idx, scaled),
         )
-        a = []
-        d = []
 
-    return t0, x, u, p, a, d, weight, target
+    inputs = PenaltyInputResolver.resolve(penalty, penalty_idx, provider, include_weight_and_target=True)
+    return inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d, inputs.weight, inputs.target
 
 
 def _get_x(ocp, phase_idx: Int, node_idx: Int, subnodes_idx: Slicy, scaled: Bool, penalty):

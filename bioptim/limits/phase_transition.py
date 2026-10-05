@@ -5,9 +5,11 @@ from casadi import vertcat, MX
 
 from .multinode_constraint import MultinodeConstraint
 from .multinode_penalty import MultinodePenalty, MultinodePenaltyFunctions
+from .penalty_classification import PenaltyClassification
+from .penalty import PenaltyFunctionAbstract
+from .penalty_controller import PenaltyController
 from .path_conditions import Bounds
 from .weight import ObjectiveWeight, ConstraintWeight
-from ..limits.penalty import PenaltyFunctionAbstract, PenaltyController
 from ..misc.enums import Node, PenaltyType, InterpolationType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.mapping import BiMapping
@@ -77,6 +79,7 @@ class PhaseTransition(MultinodePenalty):
             multinode_penalty=transition,
             custom_function=custom_function,
             weight=weight,
+            _classification=PenaltyClassification.from_weight(weight, PenaltyType.INTERNAL),
             **extra_parameters,
         )
 
@@ -93,14 +96,6 @@ class PhaseTransition(MultinodePenalty):
         if isinstance(self.weight, ConstraintWeight):
             self: MultinodeConstraint
             MultinodeConstraint.set_bounds(self)
-
-    def _get_pool_to_add_penalty(self, ocp, nlp):
-        if isinstance(self.weight, ConstraintWeight):
-            # No weight means it is a constraint
-            return nlp.g_internal if nlp else ocp.g_internal
-        else:
-            # With weight means it is an objective
-            return nlp.J_internal if nlp else ocp.J_internal
 
 
 class PhaseTransitionList(OptionList):

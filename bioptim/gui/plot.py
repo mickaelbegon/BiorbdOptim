@@ -10,7 +10,7 @@ from ..optimization.non_linear_program import NonLinearProgram
 from .serializable_class import OcpSerializable
 from ..dynamics.ode_solvers import OdeSolver
 from ..limits.path_conditions import Bounds
-from ..limits.penalty_helpers import PenaltyHelpers
+from ..limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from ..misc.enums import PlotType, Shooting, SolutionIntegrator, QuadratureRule, InterpolationType
 from ..misc.mapping import Mapping, BiMapping, BiMappingOrIterableOptional
 from ..optimization.solution.solution import Solution
@@ -695,10 +695,15 @@ class PlotOcp:
         self, i: Int, nlp: NonLinearProgram, variable: Str, ctr: Int, ax: plt.Axes, mapping_to_first_index: IntList
     ) -> None:
         """Add bounds to a specific plot"""
-        if nlp.plot[variable].bounds.type == InterpolationType.EACH_FRAME:
+        if nlp.plot[variable].bounds.type in [InterpolationType.EACH_FRAME, InterpolationType.ALL_POINTS]:
             ns = nlp.plot[variable].bounds.min.shape[1] - 1
         else:
             ns = nlp.ns
+        t = (
+            [np.linspace(0, ns, ns + 1) for i in range(len(self.t))]
+            if nlp.plot[variable].bounds.type == InterpolationType.ALL_POINTS
+            else self.t
+        )
 
         # TODO: introduce repeat for the COLLOCATIONS min/max_bounds only for states graphs.
         # For now the plots in COLLOCATIONS with LINEAR are not giving the right values
@@ -712,8 +717,8 @@ class PlotOcp:
             bounds_min = np.concatenate((bounds_min, [bounds_min[-1]]))
             bounds_max = np.concatenate((bounds_max, [bounds_max[-1]]))
 
-        self.plots_bounds.append([ax.step(self.t[i], bounds_min, where="post", **self.plot_options["bounds"]), i])
-        self.plots_bounds.append([ax.step(self.t[i], bounds_max, where="post", **self.plot_options["bounds"]), i])
+        self.plots_bounds.append([ax.step(t[i], bounds_min, where="post", **self.plot_options["bounds"]), i])
+        self.plots_bounds.append([ax.step(t[i], bounds_max, where="post", **self.plot_options["bounds"]), i])
 
     def _add_new_axis(self, variable: Str, nb: Int, n_rows: Int, n_cols: Int) -> np.ndarray[plt.Axes]:
         """
@@ -1046,33 +1051,29 @@ class PlotOcp:
         """Extract data for penalty-based plots"""
         penalty = custom_plot.parameters["penalty"]
 
-        t0 = PenaltyHelpers.t0(penalty, idx, lambda p_idx, n_idx: time_stepwise[p_idx][n_idx][0])
+        inputs = PenaltyInputResolver.resolve(
+            penalty,
+            idx,
+            PenaltyInputProvider(
+                time=lambda p_idx, n_idx: time_stepwise[p_idx][n_idx][0],
+                states=lambda p_idx, n_idx, sn_idx: (
+                    x[n_idx][:, sn_idx.index()] if n_idx < len(x) else np.ndarray((0, 1))
+                ),
+                controls=lambda p_idx, n_idx, sn_idx: (
+                    u[n_idx][:, sn_idx.index()] if n_idx < len(u) else np.ndarray((0, 1))
+                ),
+                parameters=lambda p_idx, n_idx, sn_idx: np.array(p),
+                algebraic_states=lambda p_idx, n_idx, sn_idx: (
+                    a[n_idx][:, sn_idx.index()] if n_idx < len(a) else np.ndarray((0, 1))
+                ),
+                numerical_timeseries=lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(
+                    self.ocp, p_idx, n_idx, sn_idx
+                ),
+            ),
+        )
+        d_node = DM(0, 1) if inputs.d.shape == (0, 0) else inputs.d
 
-        x_node = PenaltyHelpers.states(
-            penalty,
-            idx,
-            lambda p_idx, n_idx, sn_idx: x[n_idx][:, sn_idx.index()] if n_idx < len(x) else np.ndarray((0, 1)),
-        )
-        u_node = PenaltyHelpers.controls(
-            penalty,
-            idx,
-            lambda p_idx, n_idx, sn_idx: u[n_idx][:, sn_idx.index()] if n_idx < len(u) else np.ndarray((0, 1)),
-        )
-        p_node = PenaltyHelpers.parameters(penalty, 0, lambda p_idx, n_idx, sn_idx: np.array(p))
-        a_node = PenaltyHelpers.states(
-            penalty,
-            idx,
-            lambda p_idx, n_idx, sn_idx: a[n_idx][:, sn_idx.index()] if n_idx < len(a) else np.ndarray((0, 1)),
-        )
-        d_node = PenaltyHelpers.numerical_timeseries(
-            penalty,
-            idx,
-            lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(self.ocp, p_idx, n_idx, sn_idx),
-        )
-        if d_node.shape == (0, 0):
-            d_node = DM(0, 1)
-
-        return t0, x_node, u_node, p_node, a_node, d_node
+        return inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, d_node
 
     def _get_direct_node_data(
         self,
@@ -1185,8 +1186,13 @@ class PlotOcp:
                         y_min = np.inf
                         for p in ax.get_children():
                             if isinstance(p, lines.Line2D):
-                                y_min = min(y_min, np.nanmin(p.get_ydata()))
-                                y_max = max(y_max, np.nanmax(p.get_ydata()))
+                                y_data = np.asarray(p.get_ydata())
+                                if y_data.size == 0 or np.isnan(y_data).all():
+                                    continue
+                                y_min = min(y_min, np.nanmin(y_data))
+                                y_max = max(y_max, np.nanmax(y_data))
+                        if not np.isfinite(y_min) or not np.isfinite(y_max):
+                            continue
                         ax.set_ylim(self._compute_ylim(y_min, y_max, 1.25))
 
         for p in self.plots_vertical_lines:

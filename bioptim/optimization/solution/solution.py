@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from casadi import vertcat, DM, Function
@@ -11,6 +12,7 @@ from ..optimization_vector import OptimizationVectorHelper
 from ...dynamics.ode_solvers import OdeSolver
 from ...interfaces.solve_ivp_interface import solve_ivp_interface
 from ...limits.path_conditions import InitialGuess, InitialGuessList
+from ...limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
 from ...limits.penalty_helpers import PenaltyHelpers
 from ...limits.penalty_option import PenaltyOption
 from ...misc.enums import (
@@ -277,12 +279,11 @@ class Solution:
 
         dt, sol_states, sol_controls, sol_params, sol_algebraic_states = sol
 
-        vector = np.ndarray((0, 1))
-
         # For time
         if len(dt.shape) == 1:
             dt = dt[:, np.newaxis]
-        vector = np.concatenate((vector, dt))
+
+        state_vector = [dt]
 
         # For states
         for p, ss in enumerate(sol_states):
@@ -299,9 +300,8 @@ class Solution:
 
             for i in range(all_ns[p] * nb_intermediate_frames + 1):
                 for key in ss.keys():
-                    vector = np.concatenate(
-                        (vector, ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, np.newaxis])
-                    )
+                    state_vector.append(ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, None])
+        vector = np.vstack(state_vector)
 
         # For controls
         for p, ss in enumerate(sol_controls):
@@ -1036,37 +1036,32 @@ class Solution:
 
         penalty = self.ocp.phase_transitions[phase_idx - 1]
 
-        t0 = PenaltyHelpers.t0(penalty, 0, lambda p, n: self._stepwise_times[p][n][0])
         dt = PenaltyHelpers.phases_dt(penalty, self.ocp, lambda p: np.array([self.phases_dt[idx] for idx in p]))
         # Compute the error between the last state of the previous phase and the first state of the next phase
         # based on the phase transition objective or constraint function. That is why we need to concatenate
         # twice the last state
-        x = PenaltyHelpers.states(penalty, 0, lambda p, n, sn: integrated_states[-1])
-
-        u = PenaltyHelpers.controls(
+        inputs = PenaltyInputResolver.resolve(
             penalty,
             0,
-            lambda p, n, sn: (
-                decision_controls[p][n][:, sn.index()] if n < len(decision_controls[p]) else np.ndarray((0, 1))
+            PenaltyInputProvider(
+                time=lambda p, n: self._stepwise_times[p][n][0],
+                states=lambda p, n, sn: integrated_states[-1],
+                controls=lambda p, n, sn: (
+                    decision_controls[p][n][:, sn.index()] if n < len(decision_controls[p]) else np.ndarray((0, 1))
+                ),
+                parameters=lambda p, n, sn: params,
+                algebraic_states=lambda p, n, sn: (
+                    decision_algebraic_states[p][n][:, sn.index()]
+                    if n < len(decision_algebraic_states[p])
+                    else np.ndarray((0, 1))
+                ),
+                numerical_timeseries=lambda p, n, sn: get_numerical_timeseries(self.ocp, p, n, sn),
             ),
         )
-        a = PenaltyHelpers.states(
-            penalty,
-            0,
-            lambda p, n, sn: (
-                decision_algebraic_states[p][n][:, sn.index()]
-                if n < len(decision_algebraic_states[p])
-                else np.ndarray((0, 1))
-            ),
-        )
-        d_tp = PenaltyHelpers.numerical_timeseries(
-            penalty,
-            0,
-            lambda p, n, sn: get_numerical_timeseries(self.ocp, p, n, sn),
-        )
-        d = np.array([]) if d_tp.shape == (0, 0) else np.array(d_tp)
+        d = np.array([]) if inputs.d.shape == (0, 0) else np.array(inputs.d)
+        inputs = replace(inputs, d=d)
 
-        dx = penalty.function[-1](t0, dt, x, u, params, a, d)
+        dx = penalty.function[-1](*inputs.function_arguments(dt))
         if dx.shape[0] != decision_states[phase_idx][0].shape[0]:
             raise RuntimeError(
                 f"Phase transition must have the same number of states ({dx.shape[0]}) "
@@ -1327,44 +1322,36 @@ class Solution:
         val_weighted = []
 
         phases_dt = PenaltyHelpers.phases_dt(penalty, self.ocp, lambda p: np.array([self.phases_dt[idx] for idx in p]))
-        params = PenaltyHelpers.parameters(
-            penalty, 0, lambda p_idx, n_idx, sn_idx: self._dispatch_params(self._parameters.scaled[0])
-        )
-
         merged_x = self._decision_states.to_dict(to_merge=SolutionMerge.KEYS, scaled=True)
         merged_u = self._stepwise_controls.to_dict(to_merge=SolutionMerge.KEYS, scaled=True)
         merged_a = self._decision_algebraic_states.to_dict(to_merge=SolutionMerge.KEYS, scaled=True)
         for idx in range(len(penalty.node_idx)):
-            t0 = PenaltyHelpers.t0(penalty, idx, lambda p_idx, n_idx: self._stepwise_times[p_idx][n_idx][0])
-            x = PenaltyHelpers.states(
+            inputs = PenaltyInputResolver.resolve(
                 penalty,
                 idx,
-                lambda p_idx, n_idx, sn_idx: self._get_x(self.ocp, penalty, p_idx, n_idx, sn_idx, merged_x),
+                PenaltyInputProvider(
+                    time=lambda p_idx, n_idx: self._stepwise_times[p_idx][n_idx][0],
+                    states=lambda p_idx, n_idx, sn_idx: self._get_x(self.ocp, penalty, p_idx, n_idx, sn_idx, merged_x),
+                    controls=lambda p_idx, n_idx, sn_idx: self._get_u(
+                        self.ocp, penalty, p_idx, n_idx, sn_idx, merged_u
+                    ),
+                    parameters=lambda p_idx, n_idx, sn_idx: self._dispatch_params(self._parameters.scaled[0]),
+                    algebraic_states=lambda p_idx, n_idx, sn_idx: self._get_x(
+                        self.ocp, penalty, p_idx, n_idx, sn_idx, merged_a
+                    ),
+                    numerical_timeseries=lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(
+                        self.ocp, p_idx, n_idx, sn_idx
+                    ),
+                ),
+                include_weight_and_target=True,
             )
-            u = PenaltyHelpers.controls(
-                penalty,
-                idx,
-                lambda p_idx, n_idx, sn_idx: self._get_u(self.ocp, penalty, p_idx, n_idx, sn_idx, merged_u),
-            )
-            a = PenaltyHelpers.states(
-                penalty,
-                idx,
-                lambda p_idx, n_idx, sn_idx: self._get_x(self.ocp, penalty, p_idx, n_idx, sn_idx, merged_a),
-            )
-            d_tp = PenaltyHelpers.numerical_timeseries(
-                penalty,
-                idx,
-                lambda p_idx, n_idx, sn_idx: get_numerical_timeseries(self.ocp, p_idx, n_idx, sn_idx),
-            )
-            d = np.array([]) if d_tp.shape == (0, 0) else np.array(d_tp)
-
-            weight = PenaltyHelpers.weight(penalty, idx)
-            target = PenaltyHelpers.target(penalty, idx)
+            d = np.array([]) if inputs.d.shape == (0, 0) else np.array(inputs.d)
+            inputs = replace(inputs, d=d)
 
             node_idx = penalty.node_idx[idx]
-            val.append(penalty.function_non_threaded[node_idx](t0, phases_dt, x, u, params, a, d))
+            val.append(penalty.function_non_threaded[node_idx](*inputs.function_arguments(phases_dt)))
             val_weighted.append(
-                penalty.weighted_function_non_threaded[node_idx](t0, phases_dt, x, u, params, a, d, weight, target)
+                penalty.weighted_function_non_threaded[node_idx](*inputs.weighted_function_arguments(phases_dt))
             )
 
         if self.ocp.n_threads > 1:

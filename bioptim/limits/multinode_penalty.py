@@ -2,11 +2,13 @@ from typing import Callable, Any
 
 from casadi import MX_eye, SX_eye, jacobian, Function, MX, SX, vertcat
 
-from .constraints import PenaltyOption
 from .objective_functions import ObjectiveFunction
+from .penalty_classification import PenaltyClassification, PenaltyNature
+from .penalty import PenaltyFunctionAbstract
+from .penalty_controller import PenaltyController
+from .penalty_option import PenaltyOption
 from .weight import ObjectiveWeight, ConstraintWeight
-from ..limits.penalty import PenaltyFunctionAbstract, PenaltyController
-from ..limits.penalty_helpers import PenaltyHelpers
+from .penalty_subnodes import multinode_starting_indices
 from ..misc.enums import Node, PenaltyType
 from ..misc.fcn_enum import FcnEnum
 from ..misc.mapping import BiMapping
@@ -48,14 +50,21 @@ class MultinodePenalty(PenaltyOption):
         weight: ObjectiveWeight | ConstraintWeight,
         multinode_penalty: Any | Callable = None,
         custom_function: Callable = None,
+        _classification: PenaltyClassification | None = None,
         **extra_parameters: Any,
     ):
         if not isinstance(multinode_penalty, _multinode_penalty_fcn):
             custom_function = multinode_penalty
             multinode_penalty = _multinode_penalty_fcn.CUSTOM
 
+        extra_parameters.pop("penalty_type", None)
         super(MultinodePenalty, self).__init__(
-            penalty=multinode_penalty, custom_function=custom_function, weight=weight, **extra_parameters
+            penalty=multinode_penalty,
+            custom_function=custom_function,
+            weight=weight,
+            penalty_type=PenaltyType.INTERNAL,
+            _classification=_classification,
+            **extra_parameters,
         )
 
         for node in nodes:
@@ -81,39 +90,41 @@ class MultinodePenalty(PenaltyOption):
         self.dt = 1
         self.node_idx = [0]
         self.all_nodes_index = []  # This is filled when nodes are collapsed as actual time indices
-        self.penalty_type = PenaltyType.INTERNAL
-
         self.phase_dynamics = []  # This is set in _prepare_controller_cx
         self.ns = []  # This is set in _prepare_controller_cx
         self.control_types = []  # This is set in _prepare_controller_cx
 
-    def _get_pool_to_add_penalty(self, ocp, nlp):
-        raise NotImplementedError("This is an abstract method and should be implemented by child")
-
     def _add_penalty_to_pool(self, controller: list[PenaltyController]):
-
-        controller = controller[0]  # This is a special case of Node.TRANSITION
-
-        ocp = controller.ocp
-        nlp = controller.get_nlp
-        pool = self._get_pool_to_add_penalty(ocp, nlp)
-        pool[self.list_index] = self
+        super(MultinodePenalty, self)._add_penalty_to_pool(controller)
 
     def ensure_penalty_sanity(self, ocp, nlp):
-        pool = self._get_pool_to_add_penalty(ocp, nlp)
+        super(MultinodePenalty, self).ensure_penalty_sanity(ocp, nlp)
 
-        if self.list_index < 0:
-            for i, j in enumerate(pool):
-                if not j:
-                    self.list_index = i
-                    return
-            else:
-                pool.append([])
-                self.list_index = len(pool) - 1
-        else:
-            while self.list_index >= len(pool):
-                pool.append([])
-            pool[self.list_index] = []
+    def _prepare_penalty_controllers(self, ocp, nlp) -> list[PenaltyController]:
+        """Prepare controllers belonging to the multiple nodes of this penalty."""
+
+        current_node_type = self.node
+        self.dt = 1
+
+        controllers = []
+        self.multinode_idx = []
+        penalty_type = self.type.get_type()
+        for node, phase_idx in zip(self.nodes, self.nodes_phase):
+            self.node = node
+            phase_nlp = ocp.nlp[phase_idx % ocp.n_phases]  # this is to allow using -1 to refer to the last phase
+
+            controller = self.get_penalty_controller(ocp, phase_nlp)
+            controllers.append(controller)
+            if (self.node[0] == Node.END or self.node[0] == phase_nlp.ns) and phase_nlp.U != []:
+                # Make an exception to the fact that U is not available for the last node
+                controller.u = [phase_nlp.U[-1]]
+            penalty_type.validate_penalty_time_index(self, controller)
+            self.multinode_idx.append(controller.t[0])
+
+        # Reset the sentinel node used to distinguish multinode penalties.
+        self.node = current_node_type
+        self.ensure_penalty_sanity(ocp, controllers[0].get_nlp)
+        return controllers
 
 
 class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
@@ -734,7 +745,7 @@ class MultinodePenaltyFunctions(PenaltyFunctionAbstract):
             penalty.ns = [c.get_nlp.ns for c in controllers]
             penalty.control_types = [c.get_nlp.control_type for c in controllers]
 
-            indices = PenaltyHelpers.get_multinode_penalty_subnodes_starting_index(penalty)
+            indices = multinode_starting_indices(penalty)
             for index, c in zip(indices, controllers):
                 c.cx_index_to_get = index
 
@@ -874,7 +885,7 @@ class MultinodePenaltyList(UniquePerPhaseOptionList):
 
             mnc.name = mnc.type.name + "_" + "".join(("Multinode: ", *node_names))[:-2]
 
-            if mnc.weight:
+            if mnc.classification.nature is PenaltyNature.OBJECTIVE:
                 mnc.base = ObjectiveFunction.MayerFunction
 
             # TODO this only adds, it does not replace
