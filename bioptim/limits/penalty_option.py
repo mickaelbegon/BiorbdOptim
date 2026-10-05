@@ -3,15 +3,14 @@ from typing import Any, Callable
 import numpy as np
 from casadi import vertcat, Function, jacobian, diag
 
-from ..optimization.optimization_variable import OptimizationVariableList
 from .penalty_classification import PenaltyClassification, PenaltyNature
 from .penalty_controller import PenaltyController
 from .penalty_function_builder import PenaltyFunctionBuilder, PenaltyFunctionBuildContext
-from .penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
+from .penalty_inputs import PenaltyConstructionContext, PenaltyInputResolver
 from .penalty_nodes import PenaltyNodeResolver
-from ..limits.penalty_subnodes import Slicy
+from .penalty_ocp_input_provider import OcpPenaltyInputProviderFactory
 from ..limits.weight import ObjectiveWeight, ConstraintWeight
-from ..misc.enums import Node, PlotType, ControlType, PenaltyType, QuadratureRule, PhaseDynamics
+from ..misc.enums import Node, PlotType, PenaltyType, QuadratureRule, PhaseDynamics
 from ..misc.mapping import BiMapping
 from ..misc.options import OptionGeneric
 from ..models.protocols.stochastic_biomodel import StochasticBioModel
@@ -549,159 +548,30 @@ class PenaltyOption(OptionGeneric):
             )
 
     def get_variable_inputs(self, controllers: list[PenaltyController]):
+        """Return the legacy symbolic input tuple for the active controller."""
+
+        context = self._prepare_construction_context(controllers)
+        inputs = PenaltyInputResolver.resolve(
+            self,
+            context.penalty_idx,
+            OcpPenaltyInputProviderFactory.build(self, context.controller.ocp),
+            is_constructing_penalty=True,
+        )
+
+        return context.controller, inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d
+
+    def _prepare_construction_context(self, controllers: list[PenaltyController]) -> PenaltyConstructionContext:
+        """Select the controller and penalty position used for symbolic construction."""
+
         if self.is_multinode_penalty:
             controller = controllers[0]  # Recast controller as a normal variable (instead of a list)
             self.node_idx[0] = controller.node_index
-
-            self.all_nodes_index = []
-            for ctrl in controllers:
-                self.all_nodes_index.extend(ctrl.t)
-
+            self.all_nodes_index = [node_idx for ctrl in controllers for node_idx in ctrl.t]
         else:
             controller = controllers[0]
 
         self._check_sanity_of_penalty_interactions(controller)
-
-        ocp = controller.ocp
-        penalty_idx = self.node_idx.index(controller.node_index)
-
-        inputs = PenaltyInputResolver.resolve(
-            self,
-            penalty_idx,
-            PenaltyInputProvider(
-                time=lambda p, n: ocp.node_time(phase_idx=p, node_idx=n),
-                states=lambda p_idx, n_idx, sn_idx: self._get_states(
-                    ocp, ocp.nlp[p_idx].states, p_idx, n_idx, sn_idx
-                ),
-                controls=lambda p_idx, n_idx, sn_idx: self._get_u(ocp, p_idx, n_idx, sn_idx),
-                parameters=lambda p_idx, n_idx, sn_idx: ocp.parameters.scaled.cx_start,
-                algebraic_states=lambda p_idx, n_idx, sn_idx: self._get_states(
-                    ocp, ocp.nlp[p_idx].algebraic_states, p_idx, n_idx, sn_idx
-                ),
-                numerical_timeseries=lambda p_idx, n_idx, sn_idx: self.get_numerical_timeseries(
-                    ocp, p_idx, n_idx, sn_idx
-                ),
-            ),
-            is_constructing_penalty=True,
-        )
-
-        return controller, inputs.t0, inputs.x, inputs.u, inputs.p, inputs.a, inputs.d
-
-    @staticmethod
-    def _get_states(ocp, states: OptimizationVariableList, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        states.node_index = n_idx
-
-        x = ocp.cx()
-        if states.scaled.cx_start.shape == (0, 0):
-            return x
-
-        if sn_idx.start == Node.START:
-            x = vertcat(x, states.scaled.cx_start)
-            if sn_idx.stop == 1:
-                pass
-            elif sn_idx.stop == Node.PENULTIMATE:
-                if n_idx < ocp.nlp[p_idx].ns + 1:
-                    x = vertcat(x, vertcat(*states.scaled.cx_intermediates_list))
-            elif sn_idx.stop == Node.END:
-                if n_idx < ocp.nlp[p_idx].ns + 1:
-                    x = vertcat(vertcat(x, vertcat(*states.scaled.cx_intermediates_list)), states.scaled.cx_end)
-            else:
-                raise ValueError("The sn_idx.stop should be 1 or None if sn_idx.start == 0")
-
-        elif sn_idx.start == 1:
-            if sn_idx.stop == 2:
-                x = vertcat(x, vertcat(states.scaled.cx_mid))
-            else:
-                raise ValueError("The sn_idx.stop should be 2 if sn_idx.start == 1")
-
-        elif sn_idx.start == 2:
-            if sn_idx.stop == 3:
-                x = vertcat(x, vertcat(states.scaled.cx_end))
-            else:
-                raise ValueError("The sn_idx.stop should be 3 if sn_idx.start == 2")
-
-        elif sn_idx.start == Node.END:
-            x = vertcat(x, vertcat(states.scaled.cx_end))
-            if sn_idx.stop is not None:
-                raise ValueError("The sn_idx.stop should be None if sn_idx.start == -1")
-
-        else:
-            raise ValueError(f"The sn_idx.start {sn_idx.start} not recognized.")
-
-        return x
-
-    def _get_u(self, ocp, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        nlp = ocp.nlp[p_idx]
-        controls = nlp.controls
-        controls.node_index = n_idx
-
-        def vertcat_cx_end():
-            if nlp.control_type in (ControlType.LINEAR_CONTINUOUS,):
-                return vertcat(u, controls.scaled.cx_end)
-            elif nlp.control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
-                if n_idx < nlp.n_controls_nodes - 1:
-                    return vertcat(u, controls.scaled.cx_end)
-
-                elif n_idx == nlp.n_controls_nodes - 1:
-                    # If we are at the penultimate node, we still can use the cx_end, unless we are
-                    # performing some kind of integration or derivative and this last node does not exist
-                    if nlp.control_type in (ControlType.CONSTANT_WITH_LAST_NODE,):
-                        return vertcat(u, controls.scaled.cx_end)
-                    if self.integrate or self.derivative or self.explicit_derivative or self.is_multinode_penalty:
-                        return u
-                    else:
-                        return vertcat(u, controls.scaled.cx_end)
-
-                else:
-                    return u
-            else:
-                raise NotImplementedError(f"Control type {nlp.control_type} not implemented yet")
-
-        u = ocp.cx()
-        if sn_idx.start == Node.START:
-            u = vertcat(u, controls.scaled.cx_start)
-            if sn_idx.stop == 1:
-                pass
-            elif sn_idx.stop == Node.PENULTIMATE or sn_idx.stop == Node.END:
-                u = vertcat_cx_end()
-            else:
-                raise ValueError(f"The sn_idx.stop {sn_idx.stop} was not recognized.")
-
-        elif sn_idx.start == 1:
-            if sn_idx.stop == 2:
-                u = vertcat(u, controls.scaled.cx_mid)
-            else:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-
-        elif sn_idx.start == 2:
-            # This is not the actual endpoint but a midpoint that must use cx_end
-            if sn_idx.stop == 3:
-                u = vertcat(u, controls.scaled.cx_end)
-            else:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-
-        elif sn_idx.start == Node.END:
-            if sn_idx.stop is not None:
-                raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
-            u = vertcat_cx_end()
-
-        else:
-            raise ValueError(f"The sn_idx.start {sn_idx.start} not recognized.")
-
-        return u
-
-    def get_numerical_timeseries(self, ocp, p_idx: Int, n_idx: Int, sn_idx: Slicy) -> CX:
-        nlp = ocp.nlp[p_idx]
-        numerical_timeseries = nlp.numerical_timeseries
-
-        if numerical_timeseries.cx_start.shape == (0, 0):
-            return ocp.cx()
-        elif sn_idx.start == Node.START:
-            return numerical_timeseries.cx_start
-        elif sn_idx.start == Node.END:
-            return numerical_timeseries.cx_end
-        else:
-            raise ValueError(f"The sn_idx [{sn_idx.start}, {sn_idx.stop}] was not recognized.")
+        return PenaltyConstructionContext(controller, self.node_idx.index(controller.node_index))
 
     @staticmethod
     def define_target_mapping(controller: PenaltyController, key: Str, rows):

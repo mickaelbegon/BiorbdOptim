@@ -3,7 +3,9 @@ from types import SimpleNamespace
 import numpy as np
 
 from bioptim import ControlType, Node
-from bioptim.limits.penalty_inputs import PenaltyInputProvider, PenaltyInputResolver
+from bioptim.limits.penalty_inputs import PenaltyFunctionInputs, PenaltyInputProvider, PenaltyInputResolver
+from bioptim.limits.penalty_ocp_input_provider import OcpPenaltyInputProviderFactory
+from bioptim.limits.penalty_option import PenaltyOption
 
 
 class _Weight:
@@ -79,3 +81,41 @@ def test_resolver_preserves_penalty_helper_selection_and_argument_order():
         ("a", 3, 2, Node.END, None),
         ("d", 3, 2, Node.START, 1),
     ]
+
+
+def test_get_variable_inputs_keeps_the_legacy_tuple_while_preparing_multinode_context(monkeypatch):
+    ocp = object()
+    controllers = [
+        SimpleNamespace(ocp=ocp, node_index=3, t=[3]),
+        SimpleNamespace(ocp=ocp, node_index=0, t=[0, 1]),
+    ]
+    penalty = SimpleNamespace(
+        is_multinode_penalty=True,
+        node_idx=[0],
+        all_nodes_index=[],
+        _check_sanity_of_penalty_interactions=lambda controller: None,
+    )
+    penalty._prepare_construction_context = lambda current_controllers: PenaltyOption._prepare_construction_context(
+        penalty, current_controllers
+    )
+    provider = object()
+    calls = {}
+
+    def build(current_penalty, current_ocp):
+        calls["factory"] = (current_penalty, current_ocp)
+        return provider
+
+    def resolve(current_penalty, penalty_idx, current_provider, *, is_constructing_penalty):
+        calls["resolver"] = (current_penalty, penalty_idx, current_provider, is_constructing_penalty)
+        return PenaltyFunctionInputs("t", "x", "u", "p", "a", "d")
+
+    monkeypatch.setattr(OcpPenaltyInputProviderFactory, "build", staticmethod(build))
+    monkeypatch.setattr(PenaltyInputResolver, "resolve", staticmethod(resolve))
+
+    assert PenaltyOption.get_variable_inputs(penalty, controllers) == (controllers[0], "t", "x", "u", "p", "a", "d")
+    assert penalty.node_idx == [3]
+    assert penalty.all_nodes_index == [3, 0, 1]
+    assert calls == {
+        "factory": (penalty, ocp),
+        "resolver": (penalty, 0, provider, True),
+    }

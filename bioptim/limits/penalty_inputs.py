@@ -28,6 +28,14 @@ class PenaltyInputProvider:
 
 
 @dataclass(frozen=True)
+class PenaltyConstructionContext:
+    """The active controller and resolved position of a symbolic penalty."""
+
+    controller: Any
+    penalty_idx: int
+
+
+@dataclass(frozen=True)
 class PenaltyFunctionInputs:
     """Inputs that vary with a penalty node.
 
