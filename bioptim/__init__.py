@@ -219,6 +219,7 @@ from .models.biorbd.model_dynamics import (
 )
 from .models.pinocchio import PinocchioModel, TorquePinocchioModel
 from .models.protocols.biomodel import BioModel
+from .models.muscle_geometry import MuscleGeometry, MuscleGeometrySpline, CasadiMLP
 from .models.protocols.holonomic_constraints import HolonomicConstraintsFcn, HolonomicConstraintsList
 from .models.protocols.stochastic_biomodel import StochasticBioModel
 from .dynamics.state_space_dynamics import (
