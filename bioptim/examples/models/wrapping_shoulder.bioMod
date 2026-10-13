@@ -1,0 +1,114 @@
+version 4
+// Toy shoulder: two rotations, four Hill muscles wrapping an ellipsoid.
+// Spatial paths, SI units, zero gravity. Not a calibrated shoulder model.
+gravity 0 0 0
+
+segment base
+endsegment
+
+segment humerus
+    parent base
+    rotations zy
+    rangesQ
+        -0.04 0.04
+        -0.04 0.04
+    mass 1
+    inertia
+        0.01 0 0
+        0 0.025 0
+        0 0 0.025
+    com 0.10 0 0
+endsegment
+
+musclegroup shoulder
+    OriginParent base
+    InsertionParent humerus
+endmusclegroup
+
+muscle upper_front
+    Type hill
+    musclegroup shoulder
+    OriginPosition -0.17 -0.01 -0.025
+    InsertionPosition 0.17 0.005 0.035
+    optimalLength 0.35
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping upper_front_obstacle
+    parent base
+    muscle upper_front
+    musclegroup shoulder
+    type ellipsoid
+    RT 0 0 0 xyz 0 0 0
+    radii 0.07 0.045 0.055
+    wrappingSide 1
+endwrapping
+
+muscle lower_front
+    Type hill
+    musclegroup shoulder
+    OriginPosition -0.17 0.01 -0.025
+    InsertionPosition 0.17 -0.005 0.035
+    optimalLength 0.35
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping lower_front_obstacle
+    parent base
+    muscle lower_front
+    musclegroup shoulder
+    type ellipsoid
+    RT 0 0 0 xyz 0 0 0
+    radii 0.07 0.045 0.055
+    wrappingSide -1
+endwrapping
+
+muscle upper_back
+    Type hill
+    musclegroup shoulder
+    OriginPosition -0.17 -0.01 0.025
+    InsertionPosition 0.17 0.005 -0.035
+    optimalLength 0.35
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping upper_back_obstacle
+    parent base
+    muscle upper_back
+    musclegroup shoulder
+    type ellipsoid
+    RT 0 0 0 xyz 0 0 0
+    radii 0.07 0.045 0.055
+    wrappingSide 1
+endwrapping
+
+muscle lower_back
+    Type hill
+    musclegroup shoulder
+    OriginPosition -0.17 0.01 0.025
+    InsertionPosition 0.17 -0.005 -0.035
+    optimalLength 0.35
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping lower_back_obstacle
+    parent base
+    muscle lower_back
+    musclegroup shoulder
+    type ellipsoid
+    RT 0 0 0 xyz 0 0 0
+    radii 0.07 0.045 0.055
+    wrappingSide -1
+endwrapping

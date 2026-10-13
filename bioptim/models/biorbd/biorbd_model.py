@@ -1,4 +1,8 @@
+from __future__ import annotations
+
+import os
 from typing import Callable
+import warnings
 
 import biorbd_casadi as biorbd
 import numpy as np
@@ -20,7 +24,19 @@ from ...optimization.parameters import Parameter, ParameterList
 
 from ...misc.parameters_types import Int, IntTuple, CX, CXOptional
 
-check_version(biorbd, "1.11.1", "1.13.0")
+_experimental_wrapping = (
+    os.environ.get("BIOPTIM_ENABLE_EXPERIMENTAL_WRAPPING") == "1"
+    and biorbd.__version__ == "1.9.11"
+    and all(hasattr(biorbd, shape) for shape in ("WrappingCylinder", "WrappingEllipsoid", "WrappingTorus"))
+)
+if _experimental_wrapping:
+    warnings.warn(
+        "Experimental biorbd muscle-wrapping 1.9.11 compatibility enabled. "
+        "Only fixed-parameter models without contacts or external forces are supported.",
+        RuntimeWarning,
+    )
+else:
+    check_version(biorbd, "1.11.1", "1.13.0")
 
 
 class BiorbdModel:
@@ -58,10 +74,18 @@ class BiorbdModel:
         """
         super().__init__(**kwargs)  # For multiple inheritance compatibility
 
+        if _experimental_wrapping and (parameters is not None or external_force_set is not None or contact_types):
+            raise NotImplementedError(
+                "Experimental wrapping compatibility does not support parameters, external forces or contacts"
+            )
+
         if not isinstance(bio_model, str) and not isinstance(bio_model, biorbd.Model):
             raise ValueError("The model should be of type 'str' or 'biorbd.Model'")
 
         self.model = biorbd.Model(bio_model) if isinstance(bio_model, str) else bio_model
+
+        if _experimental_wrapping and (self.model.nbContacts() or self.model.nbSoftContacts()):
+            raise NotImplementedError("Experimental wrapping compatibility does not support model contacts")
 
         check_contacts(contact_types, self)
         self._contact_types = contact_types

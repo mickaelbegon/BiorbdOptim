@@ -1,0 +1,70 @@
+version 4
+// Toy elbow: one rotation, two antagonist Hill muscles wrapping a cylinder.
+// SI units; zero gravity isolates muscle actuation. Not an anatomical model.
+gravity 0 0 0
+
+segment base
+endsegment
+
+segment forearm
+    parent base
+    rotations z
+    rangesQ -0.20 0.20
+    mass 1
+    inertia
+        0.01 0 0
+        0 0.01 0
+        0 0 0.025
+    com 0.10 0 0
+endsegment
+
+musclegroup elbow
+    OriginParent base
+    InsertionParent forearm
+endmusclegroup
+
+muscle flexor
+    Type hill
+    musclegroup elbow
+    OriginPosition -0.15 -0.01 -0.02
+    InsertionPosition 0.15 -0.01 0.02
+    optimalLength 0.34
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping flexor_obstacle
+    parent base
+    muscle flexor
+    musclegroup elbow
+    type cylinder
+    RT 0 0 0 xyz 0 0 0
+    radius 0.05
+    length 0.18
+    wrappingSide 1
+endwrapping
+
+muscle extensor
+    Type hill
+    musclegroup elbow
+    OriginPosition -0.15 0.01 -0.02
+    InsertionPosition 0.15 0.01 0.02
+    optimalLength 0.34
+    maximalForce 120
+    tendonSlackLength 0.01
+    pennationAngle 0
+    maxVelocity 10
+endmuscle
+
+wrapping extensor_obstacle
+    parent base
+    muscle extensor
+    musclegroup elbow
+    type cylinder
+    RT 0 0 0 xyz 0 0 0
+    radius 0.05
+    length 0.18
+    wrappingSide -1
+endwrapping

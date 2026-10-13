@@ -45,12 +45,14 @@ class MuscleGeometry:
         self.joint_torque = ca.Function("muscle_joint_torque", [q, force], [-jacobian.T * force])
 
     @classmethod
-    def from_biorbd(cls, model, muscle_name: str):
+    def from_biorbd(cls, model, muscle_name: str, expand: bool = True):
         """Build a reference using a fresh model, preserving the caller's caches.
 
         This is muscle-TENDON length, not fibre length (which depends on tendon
         compliance/pennation). Generalized coordinates and velocities must agree.
         Parametrized models are deliberately rejected: weights are frozen.
+        Set expand=False for native wrapping callbacks (required with CasADi
+        versions older than 3.7, and avoids implying a pure algebraic graph).
         """
         import biorbd_casadi as biorbd
 
@@ -68,7 +70,9 @@ class MuscleGeometry:
         # un-updated joint model can silently produce a constant CasADi graph.
         raw_model.updateMuscles(coordinates, True)
         length = raw_model.muscle(names.index(muscle_name)).musculoTendonLength(raw_model, coordinates, False).to_mx()
-        function = ca.Function("reference_muscle_tendon_length", [q], [length], ["q"], ["l_mt"]).expand()
+        function = ca.Function("reference_muscle_tendon_length", [q], [length], ["q"], ["l_mt"])
+        if expand:
+            function = function.expand()
         return cls(function, muscle_name, range(model.nb_q))
 
 
