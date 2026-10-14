@@ -47,6 +47,8 @@ def prepare_ocp(
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     expand_dynamics: bool = True,
     ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
+    n_threads: int = 1,
+    use_sx: bool = False,
 ):
     """
     Prepare the actual control program to be solved
@@ -70,11 +72,16 @@ def prepare_ocp(
     phase_dynamics: PhaseDynamics
         If the dynamics equation within a phase is unique or changes at each node.
         PhaseDynamics.SHARED_DURING_THE_PHASE is much faster, but lacks the capability to have changing dynamics within
-        a phase. PhaseDynamics.ONE_PER_NODE should also be used when multi-node penalties with more than 3 nodes or with COLLOCATION (cx_intermediate_list) are added to the OCP.
+        a phase. PhaseDynamics.ONE_PER_NODE should also be used when multi-node penalties with more than 3 nodes or with
+        COLLOCATION (cx_intermediate_list) are added to the OCP.
     expand_dynamics: bool
         If the dynamics function should be expanded. Please note, this will solve the problem faster, but will slow down
         the declaration of the OCP, so it is a trade-off. Also depending on the solver, it may or may not work
         (for instance IRK is not compatible with expanded dynamics)
+    n_threads: int
+        Number of CPU threads used to map dynamics and penalties over the shooting nodes.
+    use_sx: bool
+        If the OCP graph should use CasADi SX instead of MX.
 
     Returns
     -------
@@ -157,6 +164,8 @@ def prepare_ocp(
         constraints=constraints,
         variable_mappings=dof_mapping,
         ordering_strategy=ordering_strategy,
+        n_threads=n_threads,
+        use_sx=use_sx,
     )
 
 

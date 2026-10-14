@@ -21,6 +21,7 @@ from bioptim import (
     Solver,
     JointAccelerationBiorbdModel,
     OnlineOptim,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 
@@ -32,6 +33,7 @@ def prepare_ocp(
     ode_solver: OdeSolverBase = OdeSolver.RK4(),
     use_sx: bool = True,
     n_threads: int = 1,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> OptimalControlProgram:
     """
     The initialization of an ocp
@@ -50,6 +52,8 @@ def prepare_ocp(
         If the SX variable should be used instead of MX (can be extensive on RAM)
     n_threads: int
         The number of threads to use in the paralleling (1 = no parallel computing)
+    ordering_strategy: OrderingStrategy
+        How states and controls are ordered in the global decision vector.
 
     Returns
     -------
@@ -102,6 +106,7 @@ def prepare_ocp(
         objective_functions=objective_functions,
         use_sx=use_sx,
         n_threads=n_threads,
+        ordering_strategy=ordering_strategy,
     )
 
 
