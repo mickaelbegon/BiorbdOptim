@@ -7,7 +7,6 @@ import csv
 import json
 from pathlib import Path
 
-
 CASE_ORDER = {
     "pendulum": 0,
     "cube": 1,
@@ -95,9 +94,7 @@ def write_markdown(path: Path, summaries: list[dict], metadata: list[dict]) -> N
                     (
                         f'{row["solver"]} ({row["solver_profile"]})'
                         if row.get("solver_profile")
-                        else f'{row["solver"]} ({row["linear_solver"]})'
-                        if row.get("linear_solver")
-                        else row["solver"]
+                        else f'{row["solver"]} ({row["linear_solver"]})' if row.get("linear_solver") else row["solver"]
                     ),
                     optional_number(row.get("cold_solve_wall_s")),
                     optional_number(row.get("hot_solve_wall_s")),
