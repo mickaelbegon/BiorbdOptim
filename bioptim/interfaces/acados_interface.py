@@ -22,7 +22,6 @@ from ..misc.parameters_types import (
     AnyListorDict,
 )
 
-
 _ACADOS_TIMING_FIELDS = (
     "time_tot",
     "time_lin",
