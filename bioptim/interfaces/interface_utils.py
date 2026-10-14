@@ -1,9 +1,14 @@
+import platform
 from time import perf_counter
 
-from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX, MX, DM, reshape, jacobian
+from casadi import Importer, Function, horzcat, vertcat, sum1, sum2, nlpsol, SX, MX, DM, reshape, jacobian, substitute
 import numpy as np
 
 from .solver_interface import SolverInterface
+from .c_compile_cache import cached_nlpsol, cached_nlpsol_callbacks
+from .function_transform import transformed_nlpsol
+from .post_shake_penalty_registry import PostShakePenaltyRegistry
+from .compiled_thread_map_external import compile_external_output_packets
 from ..gui.online_callback_multiprocess import OnlineCallbackMultiprocess
 from ..gui.online_callback_multiprocess_server import OnlineCallbackMultiprocessServer
 from ..gui.online_callback_server import OnlineCallbackServer
@@ -37,7 +42,14 @@ def generic_online_optim(interface: SolverInterface, ocp, show_options: AnyDictO
     online_optim = interface.opts.online_optim.get_default()
     if online_optim is None:
         return
-    elif online_optim == OnlineOptim.MULTIPROCESS:
+    if platform.system() == "Darwin" and online_optim == OnlineOptim.MULTIPROCESS:
+        raise NotImplementedError(
+            "online_optim MULTIPROCESS is not available on macOS. "
+            "Use OnlineOptim.MULTIPROCESS_SERVER for automatic plotting or OnlineOptim.SERVER with a manually started "
+            "PlottingServer."
+        )
+
+    if online_optim == OnlineOptim.MULTIPROCESS:
         to_call = OnlineCallbackMultiprocess
     elif online_optim == OnlineOptim.SERVER:
         to_call = OnlineCallbackServer
@@ -106,6 +118,9 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
     v = interface.ocp.variables_vector
     v_bounds = interface.ocp.bounds_vectors
     v_init = interface.ocp.init_vector
+    consume_override = getattr(interface, "consume_initial_guess_override", None)
+    if callable(consume_override):
+        v_init = consume_override(v_init)
 
     # Shake the tree if needed for objectives
     raw_objectives = interface.dispatch_obj_func()
@@ -146,16 +161,76 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         "ubg": all_g_bounds.max,
         "x0": v_init,
     }
-    if interface.shaked_ocp_solver is None or not can_skip_shake_objectives or not can_skip_shake_constraints:
+    compile_configuration = (
+        interface.opts.c_compile,
+        getattr(interface.opts, "compiler_flags", ()),
+        getattr(interface.opts, "cache_dir", None),
+        getattr(interface.opts, "cache_name", "ipopt"),
+        getattr(interface.opts, "function_transform", False),
+        getattr(interface.opts, "c_compile_callbacks", False),
+        getattr(interface.opts, "native_callbacks", None),
+    )
+    if (
+        interface.shaked_ocp_solver is None
+        or not can_skip_shake_objectives
+        or not can_skip_shake_constraints
+        or getattr(interface, "_c_compile_configuration", compile_configuration) != compile_configuration
+    ):
         interface.nlp = {"x": v, "f": sum1(interface.shaked_objectives), "g": interface.shaked_constraints}
+        # The symbolic constraint graph may have changed.  Do not let an
+        # evaluator cached for a previous RHO inspect a stale graph.
+        interface._initial_nlp_constraint_audit_function = None
         interface.c_compile = interface.opts.c_compile
         options = interface.opts.as_dict(interface)
+        prepared_solver = None
+        interface.function_transform_info = None
+        if compile_configuration[4]:
+            if interface.solver_name.lower() != "ipopt":
+                raise ValueError("function_transform is currently supported only for IPOPT")
+            prepared_solver, interface.function_transform_info = transformed_nlpsol(interface.nlp, options)
 
         if interface.c_compile:
-            nlpsol("nlpsol", interface.solver_name.lower(), interface.nlp, options).generate_dependencies("nlp.c")
-            interface.shaked_ocp_solver = nlpsol("nlpsol", interface.solver_name, Importer("nlp.c", "shell"), options)
+            plugin_name = interface.solver_name.lower()
+            if compile_configuration[5]:
+                interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol_callbacks(
+                    plugin_name,
+                    interface.nlp,
+                    options,
+                    compiler_flags=compile_configuration[1],
+                    cache_dir=compile_configuration[2],
+                    cache_name=compile_configuration[3],
+                    vm_solver=prepared_solver,
+                    callbacks=compile_configuration[6],
+                )
+            elif compile_configuration[2] is not None:
+                interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol(
+                    plugin_name,
+                    interface.nlp,
+                    options,
+                    compiler_flags=compile_configuration[1],
+                    cache_dir=compile_configuration[2],
+                    cache_name=compile_configuration[3],
+                    vm_solver=prepared_solver,
+                )
+            else:
+                if prepared_solver is None:
+                    prepared_solver = nlpsol("nlpsol", plugin_name, interface.nlp, options)
+                prepared_solver.generate_dependencies("nlp.c")
+                interface.shaked_ocp_solver = nlpsol(
+                    "nlpsol",
+                    plugin_name,
+                    Importer("nlp.c", "shell", {"flags": list(compile_configuration[1])}),
+                    options,
+                )
+                interface.c_compile_cache_info = None
         else:
-            interface.shaked_ocp_solver = nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
+            interface.shaked_ocp_solver = (
+                prepared_solver
+                if prepared_solver is not None
+                else nlpsol("solver", interface.solver_name.lower(), interface.nlp, options)
+            )
+            interface.c_compile_cache_info = None
+        interface._c_compile_configuration = compile_configuration
 
     if interface.lam_g is not None:
         interface.limits["lam_g0"] = interface.lam_g
@@ -163,23 +238,25 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         interface.limits["lam_x0"] = interface.lam_x
 
     # Solve the problem
+    solver_limits = interface.limits
+    if hasattr(interface, "solver_call_limits"):
+        solver_limits = interface.solver_call_limits()
+    if interface.initial_nlp_audit_enabled:
+        interface.initial_nlp_audits.append(_evaluate_initial_nlp_audit(interface, solver_limits))
     tic = perf_counter()
-    interface.out = {"sol": interface.shaked_ocp_solver.call(interface.limits)}
-    interface.out["sol"]["solver_time_to_optimize"] = interface.shaked_ocp_solver.stats()["t_wall_total"]
+    interface.out = {"sol": interface.shaked_ocp_solver.call(solver_limits)}
+    stats = interface.shaked_ocp_solver.stats()
+    madnlp_stats = stats.get("madnlp", {})
+    interface.out["sol"]["solver_time_to_optimize"] = stats.get("t_wall_total", 0.0)
     interface.out["sol"]["real_time_to_optimize"] = perf_counter() - tic
-    interface.out["sol"]["iter"] = interface.shaked_ocp_solver.stats()["iter_count"]
-    interface.out["sol"]["inf_du"] = (
-        interface.shaked_ocp_solver.stats()["iterations"]["inf_du"]
-        if "iteration" in interface.shaked_ocp_solver.stats()
-        else None
-    )
-    interface.out["sol"]["inf_pr"] = (
-        interface.shaked_ocp_solver.stats()["iterations"]["inf_pr"]
-        if "iteration" in interface.shaked_ocp_solver.stats()
-        else None
-    )
+    interface.out["sol"]["iter"] = stats.get("iter_count", 0)
+    iterations = stats.get("iterations", {})
+    interface.out["sol"]["inf_du"] = iterations.get("inf_du", madnlp_stats.get("dual_feas"))
+    interface.out["sol"]["inf_pr"] = iterations.get("inf_pr", madnlp_stats.get("primal_feas"))
     # To match acados convention (0 = success, 1 = error)
-    interface.out["sol"]["status"] = int(not interface.shaked_ocp_solver.stats()["success"])
+    interface.out["sol"]["status"] = int(not stats.get("success", False))
+    if "status" in madnlp_stats:
+        interface.out["sol"]["solver_diagnostics"] = {"return_status": madnlp_stats["status"]}
     interface.out["sol"]["solver"] = interface.solver_name
 
     # Make sure the graphs are showing the last iteration
@@ -194,6 +271,114 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
         ]
         interface.options_common["iteration_callback"].eval(to_eval, enforce=True)
     return interface.out
+
+
+def _as_flat_float_array(values) -> np.ndarray:
+    """Return a copy in CasADi's column-major vector order."""
+
+    return np.asarray(values, dtype=float).reshape(-1, order="F").copy()
+
+
+def _json_bound(value: float) -> float | None:
+    """Keep audit payloads JSON-portable when a bound is infinite."""
+
+    return float(value) if np.isfinite(value) else None
+
+
+def _bound_violation_summary(values, lower_bounds, upper_bounds) -> AnyDict:
+    """Summarize bound violations without modifying the submitted vectors."""
+
+    values = _as_flat_float_array(values)
+    lower_bounds = _as_flat_float_array(lower_bounds)
+    upper_bounds = _as_flat_float_array(upper_bounds)
+    if values.size != lower_bounds.size or values.size != upper_bounds.size:
+        raise ValueError(
+            "Cannot audit NLP bounds with mismatched dimensions: "
+            f"values={values.size}, lower={lower_bounds.size}, upper={upper_bounds.size}."
+        )
+    if np.any(np.isnan(lower_bounds)) or np.any(np.isnan(upper_bounds)):
+        raise ValueError("Cannot audit NLP bounds containing NaN.")
+    if np.any(lower_bounds > upper_bounds):
+        raise ValueError("Cannot audit NLP bounds whose lower bound exceeds the upper bound.")
+
+    finite_values = bool(np.all(np.isfinite(values)))
+    if not finite_values:
+        return {
+            "size": int(values.size),
+            "finite": False,
+            "maximum_absolute_value": None,
+            "maximum_bound_violation": None,
+            "l1_bound_violation": None,
+            "l2_bound_violation": None,
+            "worst_index": None,
+            "worst_value": None,
+            "worst_lower_bound": None,
+            "worst_upper_bound": None,
+            "violation_counts": None,
+        }
+
+    lower_violations = np.zeros(values.size)
+    upper_violations = np.zeros(values.size)
+    finite_lower = np.isfinite(lower_bounds)
+    finite_upper = np.isfinite(upper_bounds)
+    lower_violations[finite_lower] = np.maximum(lower_bounds[finite_lower] - values[finite_lower], 0.0)
+    upper_violations[finite_upper] = np.maximum(values[finite_upper] - upper_bounds[finite_upper], 0.0)
+    violations = np.maximum(lower_violations, upper_violations)
+    worst_index = int(np.argmax(violations)) if violations.size else None
+    maximum_violation = float(violations[worst_index]) if worst_index is not None else 0.0
+    if maximum_violation == 0.0:
+        worst_index = None
+
+    return {
+        "size": int(values.size),
+        "finite": True,
+        "maximum_absolute_value": float(np.max(np.abs(values))) if values.size else 0.0,
+        "maximum_bound_violation": maximum_violation,
+        "l1_bound_violation": float(np.sum(violations)),
+        "l2_bound_violation": float(np.linalg.norm(violations)),
+        "worst_index": worst_index,
+        "worst_value": float(values[worst_index]) if worst_index is not None else None,
+        "worst_lower_bound": _json_bound(lower_bounds[worst_index]) if worst_index is not None else None,
+        "worst_upper_bound": _json_bound(upper_bounds[worst_index]) if worst_index is not None else None,
+        "violation_counts": {
+            "above_1e-12": int(np.count_nonzero(violations > 1e-12)),
+            "above_1e-8": int(np.count_nonzero(violations > 1e-8)),
+            "above_1e-5": int(np.count_nonzero(violations > 1e-5)),
+        },
+    }
+
+
+def _evaluate_initial_nlp_audit(interface: SolverInterface, solver_limits: AnyDict) -> AnyDict:
+    """Evaluate the exact canonical ``g(x0)`` immediately before a solve."""
+
+    tic = perf_counter()
+    evaluator_was_cached = interface._initial_nlp_constraint_audit_function is not None
+    if not evaluator_was_cached:
+        function_name = f"initial_nlp_g_{interface.solver_name.lower()}_{id(interface):x}"
+        interface._initial_nlp_constraint_audit_function = Function(
+            function_name,
+            [interface.nlp["x"]],
+            [interface.nlp["g"]],
+            ["x"],
+            ["g"],
+        )
+
+    g_at_initial = interface._initial_nlp_constraint_audit_function(x=solver_limits["x0"])["g"]
+    return {
+        "solver": interface.solver_name,
+        "constraint_function_was_cached": evaluator_was_cached,
+        "constraints": _bound_violation_summary(
+            g_at_initial,
+            solver_limits["lbg"],
+            solver_limits["ubg"],
+        ),
+        "variables": _bound_violation_summary(
+            solver_limits["x0"],
+            solver_limits["lbx"],
+            solver_limits["ubx"],
+        ),
+        "evaluation_time_s": perf_counter() - tic,
+    }
 
 
 def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayTuple, expand: Bool):
@@ -239,6 +424,50 @@ def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayT
     return penalty(vertcat(*dt, v[len(dt) :]))
 
 
+def _normalize_pre_shake_thread_map_fragment(ocp, expression: CX, v: CX, v_bounds: DoubleNpArrayTuple) -> CX:
+    """Apply ``shake``'s phase-duration substitution without a temporary Function.
+
+    The canonical aggregate is still shaken through
+    :func:`_shake_penalties_tree`. This lighter, algebraically equivalent
+    path is only for opt-in fragments which were captured before
+    ``Function.map``; constructing a one-output Function per stage otherwise
+    dominates registry preparation time.
+    """
+
+    dt = [v_bounds[0][i] if v_bounds[0][i] == v_bounds[1][i] else v[i] for i in range(ocp.n_phases)]
+    return substitute(expression, v, vertcat(*dt, v[len(dt) :]))
+
+
+def build_post_shake_penalty_registry(
+    interface: SolverInterface, expand: Bool = False, materialize: Bool = True
+) -> PostShakePenaltyRegistry:
+    """Return an opt-in, exact registry of canonical post-shake NLP terms.
+
+    The normal solve path remains unchanged.  This helper mirrors its generic
+    objective/constraint dispatch, then applies the *same* shake operation to
+    each recorded contribution.  The resulting row indices are the final
+    canonical ``g`` row indices, not local penalty indices.
+    """
+
+    v = interface.ocp.variables_vector
+    v_bounds = interface.ocp.bounds_vectors
+    registry = PostShakePenaltyRegistry()
+    generic_dispatch_obj_func(interface, post_shake_registry=registry)
+    generic_dispatch_bounds(
+        interface,
+        include_g=True,
+        include_g_internal=True,
+        post_shake_registry=registry,
+    )
+    if materialize:
+        registry.materialize(
+            v,
+            lambda expression: _shake_penalties_tree(interface.ocp, expression, v, v_bounds, expand),
+            lambda expression: _normalize_pre_shake_thread_map_fragment(interface.ocp, expression, v, v_bounds),
+        )
+    return registry
+
+
 def generic_set_lagrange_multiplier(interface, sol: Solution):
     """
     Set the lagrange multiplier from a solution structure
@@ -254,7 +483,12 @@ def generic_set_lagrange_multiplier(interface, sol: Solution):
     return sol
 
 
-def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool):
+def generic_dispatch_bounds(
+    interface,
+    include_g: Bool,
+    include_g_internal: Bool,
+    post_shake_registry: PostShakePenaltyRegistry | None = None,
+):
     """
     Parse the bounds of the full ocp to a SQP-friendly one
 
@@ -275,13 +509,31 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
     all_g_bounds_dict[-1] = Bounds("all_g", interpolation=InterpolationType.CONSTANT)
 
     if include_g_internal:
-        penalties, bounds = interface.get_all_penalties(interface.ocp, interface.ocp.g_internal, get_bounds=True)
+        penalties, bounds = interface.get_all_penalties(
+            interface.ocp,
+            interface.ocp.g_internal,
+            get_bounds=True,
+            post_shake_registry=post_shake_registry,
+            registry_kind="constraint",
+            registry_scope="ocp_g_internal",
+            registry_phase=None,
+            registry_stage_offset=-1,
+        )
         for (_, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
             all_g_dict[-1] = vertcat(all_g_dict[-1], node_penalty)
             all_g_bounds_dict[-1].concatenate(node_bounds)
 
     if include_g:
-        penalties, bounds = interface.get_all_penalties(interface.ocp, interface.ocp.g, get_bounds=True)
+        penalties, bounds = interface.get_all_penalties(
+            interface.ocp,
+            interface.ocp.g,
+            get_bounds=True,
+            post_shake_registry=post_shake_registry,
+            registry_kind="constraint",
+            registry_scope="ocp_g",
+            registry_phase=None,
+            registry_stage_offset=-1,
+        )
         for (_, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
             all_g_dict[-1] = vertcat(all_g_dict[-1], node_penalty)
             all_g_bounds_dict[-1].concatenate(node_bounds)
@@ -295,13 +547,31 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
             )
 
         if include_g_internal:
-            penalties, bounds = interface.get_all_penalties(nlp, nlp.g_internal, get_bounds=True)
+            penalties, bounds = interface.get_all_penalties(
+                nlp,
+                nlp.g_internal,
+                get_bounds=True,
+                post_shake_registry=post_shake_registry,
+                registry_kind="constraint",
+                registry_scope="nlp_g_internal",
+                registry_phase=nlp.phase_idx,
+                registry_stage_offset=base_idx,
+            )
             for (node_idx, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
                 all_g_dict[base_idx + node_idx] = vertcat(all_g_dict[base_idx + node_idx], node_penalty)
                 all_g_bounds_dict[base_idx + node_idx].concatenate(node_bounds)
 
         if include_g:
-            penalties, bounds = interface.get_all_penalties(nlp, nlp.g, get_bounds=True)
+            penalties, bounds = interface.get_all_penalties(
+                nlp,
+                nlp.g,
+                get_bounds=True,
+                post_shake_registry=post_shake_registry,
+                registry_kind="constraint",
+                registry_scope="nlp_g",
+                registry_phase=nlp.phase_idx,
+                registry_stage_offset=base_idx,
+            )
             for (node_idx, node_penalty), node_bounds in zip(penalties.items(), bounds.values()):
                 all_g_dict[base_idx + node_idx] = vertcat(all_g_dict[base_idx + node_idx], node_penalty)
                 all_g_bounds_dict[base_idx + node_idx].concatenate(node_bounds)
@@ -321,7 +591,7 @@ def generic_dispatch_bounds(interface, include_g: Bool, include_g_internal: Bool
     return all_g, all_g_bounds
 
 
-def generic_dispatch_obj_func(interface) -> CX:
+def generic_dispatch_obj_func(interface, post_shake_registry: PostShakePenaltyRegistry | None = None) -> CX:
     """
     Parse the objective functions of the full ocp to a SQP-friendly one
 
@@ -333,9 +603,25 @@ def generic_dispatch_obj_func(interface) -> CX:
     all_J_dict = {}
 
     all_J_dict[-1] = interface.ocp.cx()
-    for _, node_penalty in interface.get_all_penalties(interface.ocp, interface.ocp.J_internal).items():
+    for _, node_penalty in interface.get_all_penalties(
+        interface.ocp,
+        interface.ocp.J_internal,
+        post_shake_registry=post_shake_registry,
+        registry_kind="objective",
+        registry_scope="ocp_J_internal",
+        registry_phase=None,
+        registry_stage_offset=-1,
+    ).items():
         all_J_dict[-1] = vertcat(all_J_dict[-1], node_penalty)
-    for _, node_penalty in interface.get_all_penalties([], interface.ocp.J).items():
+    for _, node_penalty in interface.get_all_penalties(
+        [],
+        interface.ocp.J,
+        post_shake_registry=post_shake_registry,
+        registry_kind="objective",
+        registry_scope="ocp_J",
+        registry_phase=None,
+        registry_stage_offset=-1,
+    ).items():
         all_J_dict[-1] = vertcat(all_J_dict[-1], node_penalty)
 
     phase_node_counts = 0
@@ -343,9 +629,25 @@ def generic_dispatch_obj_func(interface) -> CX:
         for i in range(nlp.ns + 1):
             all_J_dict[phase_node_counts + i] = interface.ocp.cx()
 
-        for node_idx, node_penalty in interface.get_all_penalties(nlp, nlp.J_internal).items():
+        for node_idx, node_penalty in interface.get_all_penalties(
+            nlp,
+            nlp.J_internal,
+            post_shake_registry=post_shake_registry,
+            registry_kind="objective",
+            registry_scope="nlp_J_internal",
+            registry_phase=nlp.phase_idx,
+            registry_stage_offset=phase_node_counts,
+        ).items():
             all_J_dict[node_idx + phase_node_counts] = vertcat(all_J_dict[node_idx + phase_node_counts], node_penalty)
-        for node_idx, node_penalty in interface.get_all_penalties(nlp, nlp.J).items():
+        for node_idx, node_penalty in interface.get_all_penalties(
+            nlp,
+            nlp.J,
+            post_shake_registry=post_shake_registry,
+            registry_kind="objective",
+            registry_scope="nlp_J",
+            registry_phase=nlp.phase_idx,
+            registry_stage_offset=phase_node_counts,
+        ).items():
             all_J_dict[node_idx + phase_node_counts] = vertcat(all_J_dict[node_idx + phase_node_counts], node_penalty)
 
         phase_node_counts += nlp.ns + 1
@@ -359,7 +661,16 @@ def generic_dispatch_obj_func(interface) -> CX:
 
 
 def generic_get_all_penalties(
-    interface, nlp: NonLinearProgram, penalties, scaled: Bool = True, get_bounds: Bool = False
+    interface,
+    nlp: NonLinearProgram,
+    penalties,
+    scaled: Bool = True,
+    get_bounds: Bool = False,
+    post_shake_registry: PostShakePenaltyRegistry | None = None,
+    registry_kind: str | None = None,
+    registry_scope: str | None = None,
+    registry_phase: int | None = None,
+    registry_stage_offset: int = 0,
 ):
     """
     Parse the penalties of the full ocp to a SQP-friendly one
@@ -395,6 +706,41 @@ def generic_get_all_penalties(
         }
 
     ocp = interface.ocp
+
+    def record_penalty(value, penalty, occurrence: int, node_idx: int):
+        if post_shake_registry is None:
+            return None
+        if registry_kind is None or registry_scope is None:
+            raise RuntimeError("A post-shake registry requires penalty provenance metadata.")
+        return post_shake_registry.record(
+            value,
+            kind=registry_kind,
+            scope=registry_scope,
+            penalty_name=str(penalty.name),
+            phase=registry_phase,
+            stage=registry_stage_offset + node_idx,
+            occurrence=occurrence,
+            multi_thread=bool(penalty.multi_thread),
+        )
+
+    def compiled_scalar_thread_map(penalty):
+        """Return an opt-in exact C scalar kernel, otherwise ``None``."""
+
+        if (
+            str(penalty.name) not in interface.compiled_thread_map_external_penalties
+            or interface.compiled_thread_map_external_cache_dir is None
+        ):
+            return None
+        source = penalty.weighted_function_non_threaded[0]
+        key = id(source)
+        if key not in interface._compiled_thread_map_external_functions:
+            interface._compiled_thread_map_external_functions[key] = compile_external_output_packets(
+                source,
+                interface.compiled_thread_map_external_cache_dir,
+                interface.compiled_thread_map_external_max_output_rows,
+            )
+        return interface._compiled_thread_map_external_functions[key]
+
     for penalty in penalties:
         if not penalty:
             continue
@@ -443,14 +789,117 @@ def generic_get_all_penalties(
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")
                     bound_tp.concatenate(penalty.bounds)
 
-            # We can call penalty.weighted_function[0] since multi-thread declares all the node at [0]
-            out[0] = vertcat(
-                out[0], sum2(reshape(penalty.weighted_function[0](t0, phases_dt, x, u, p, a, d, weight, target), -1, 1))
+            # We can call penalty.weighted_function[0] since multi-thread declares all the node at [0].
+            # The experimental external path deliberately compiles the scalar
+            # source and maps it again, preserving the normal aggregate graph
+            # shape while giving global MX AD an exact C call at every stage.
+            scalar_external = compiled_scalar_thread_map(penalty)
+            mapped_weighted_function = (
+                scalar_external.map(len(penalty.node_idx), "thread", interface.ocp.n_threads)
+                if scalar_external is not None
+                else penalty.weighted_function[0]
             )
-            if get_bounds:
-                if penalty.bounds is None:
-                    raise RuntimeError("Cannot get bounds if penalty.bounds is None")
-                out_bounds[0].concatenate(bound_tp)
+            penalty_value = sum2(
+                reshape(
+                    mapped_weighted_function(t0, phases_dt, x, u, p, a, d, weight, target),
+                    -1,
+                    1,
+                )
+            )
+            penalty_value = interface.transform_penalty_value(penalty, nlp, penalty_value)
+            split_by_stage = (
+                get_bounds
+                and getattr(interface, "stage_wise_multi_thread_constraints", False)
+                and isinstance(nlp, NonLinearProgram)
+                and len(penalty.node_idx) > 1
+            )
+            if split_by_stage:
+                rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
+                if remainder:
+                    raise RuntimeError(
+                        f"Cannot distribute multi-thread constraint {penalty.name} over "
+                        f"{len(penalty.node_idx)} stages: {penalty_value.shape[0]} rows."
+                    )
+                if penalty.bounds.shape[0] != rows_per_node:
+                    raise RuntimeError(
+                        f"Cannot distribute bounds for multi-thread constraint {penalty.name}: "
+                        f"expected {rows_per_node} rows per stage, got {penalty.bounds.shape[0]}."
+                    )
+                for position, node_idx in enumerate(penalty.node_idx):
+                    first_row = position * rows_per_node
+                    last_row = first_row + rows_per_node
+                    contribution = penalty_value[first_row:last_row]
+                    out[node_idx] = vertcat(out[node_idx], contribution)
+                    record_penalty(contribution, penalty, position, node_idx)
+                    out_bounds[node_idx].concatenate(penalty.bounds)
+            else:
+                out[0] = vertcat(out[0], penalty_value)
+                parent_term_index = record_penalty(penalty_value, penalty, 0, 0)
+                # The solver still receives one aggregate ThreadMap vector.
+                # Registry-only fragments make each stage addressable for a
+                # compiled/map exact derivative evaluator and later scatter.
+                # Fragments currently model canonical constraint rows. An
+                # objective parent has no ``g`` interval to scatter into, so
+                # leave it as its existing aggregate term until an objective
+                # packet contract is introduced separately.
+                if post_shake_registry is not None and registry_kind == "constraint" and len(penalty.node_idx) > 1:
+                    rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
+                    if not remainder:
+                        for position, node_idx in enumerate(penalty.node_idx):
+                            first_row = position * rows_per_node
+                            # ``weighted_function`` is a CasADi Function.map.
+                            # Re-invoke its original scalar function with the
+                            # stage column before that map is aggregated. This
+                            # keeps the normal solver graph unchanged while
+                            # giving the opt-in registry a local graph that is
+                            # not reconstructed by slicing the post-map MX
+                            # expression after ``shake``.
+                            stage_value = sum2(
+                                reshape(
+                                    penalty.weighted_function_non_threaded[0](
+                                        t0[:, position],
+                                        phases_dt,
+                                        x[:, position],
+                                        u[:, position],
+                                        p,
+                                        a[:, position],
+                                        # A penalty without numerical time
+                                        # series is represented by an empty
+                                        # 0-column CasADi matrix after the
+                                        # aggregate ``horzcat``.  Preserve
+                                        # that empty argument instead of
+                                        # trying to slice a non-existent
+                                        # stage column.
+                                        d[:, position] if d is not None and d.shape[1] else d,
+                                        weight[:, position],
+                                        target[:, position],
+                                    ),
+                                    -1,
+                                    1,
+                                )
+                            )
+                            stage_value = interface.transform_penalty_value(penalty, nlp, stage_value)
+                            if stage_value.shape[0] != rows_per_node:
+                                raise RuntimeError(
+                                    f"Cannot capture pre-map fragment for {penalty.name}: expected "
+                                    f"{rows_per_node} rows, got {stage_value.shape[0]}."
+                                )
+                            post_shake_registry.record_pre_shake_thread_map_fragment(
+                                stage_value,
+                                parent_term_index=parent_term_index,
+                                parent_row_offset=first_row,
+                                kind="thread_map_fragment",
+                                scope=registry_scope or "unknown",
+                                penalty_name=str(penalty.name),
+                                phase=registry_phase,
+                                stage=registry_stage_offset + node_idx,
+                                occurrence=position,
+                                multi_thread=True,
+                            )
+                if get_bounds:
+                    if penalty.bounds is None:
+                        raise RuntimeError("Cannot get bounds if penalty.bounds is None")
+                    out_bounds[0].concatenate(bound_tp)
         else:
             for idx in range(len(penalty.node_idx)):
                 if nlp:
@@ -460,10 +909,10 @@ def generic_get_all_penalties(
                 t0, x, u, p, a, d, weight, target = _get_weighted_function_inputs(penalty, idx, ocp, nlp, scaled)
 
                 node_idx = penalty.node_idx[idx]
-                out[node_idx] = vertcat(
-                    out[node_idx],
-                    sum2(penalty.weighted_function[node_idx](t0, phases_dt, x, u, p, a, d, weight, target)),
-                )
+                penalty_value = sum2(penalty.weighted_function[node_idx](t0, phases_dt, x, u, p, a, d, weight, target))
+                contribution = interface.transform_penalty_value(penalty, nlp, penalty_value)
+                out[node_idx] = vertcat(out[node_idx], contribution)
+                record_penalty(contribution, penalty, idx, node_idx)
                 if get_bounds:
                     if penalty.bounds is None:
                         raise RuntimeError("Cannot get bounds if penalty.bounds is None")

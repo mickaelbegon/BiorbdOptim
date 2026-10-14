@@ -1,0 +1,24 @@
+diff --git a/binding/python3/CMakeLists.txt b/binding/python3/CMakeLists.txt
+--- a/binding/python3/CMakeLists.txt
++++ b/binding/python3/CMakeLists.txt
+@@ -7,7 +7,8 @@ if (${CMAKE_VERSION} VERSION_GREATER_EQUAL "4.1.1")
+     cmake_policy(SET CMP0177 OLD)
+ endif()
+ # Check SWIG version
+-if(SWIG_VERSION VERSION_GREATER_EQUAL "4.4.0")
++option(BIORBD_ALLOW_SWIG4_4 "Experimental SWIG runtime 5 support for CasADi 3.8" OFF)
++if(SWIG_VERSION VERSION_GREATER_EQUAL "4.4.0" AND NOT BIORBD_ALLOW_SWIG4_4)
+     message(FATAL_ERROR "SWIG ${SWIG_VERSION} is not supported — please use 4.3.1.")
+ endif()
+ 
+diff --git a/src/Utils/Path.cpp b/src/Utils/Path.cpp
+--- a/src/Utils/Path.cpp
++++ b/src/Utils/Path.cpp
+@@ -1,6 +1,7 @@
+ #define BIORBD_API_EXPORTS
+ #include "Utils/Path.h"
+ 
++#include <cstdint>
+ #include <fstream>
+ #include <regex>
+ 

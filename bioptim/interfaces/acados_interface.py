@@ -1,17 +1,22 @@
+from copy import deepcopy
 from time import perf_counter
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from scipy import linalg
 from casadi import SX, vertcat, Function
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
+from acados_template.utils import status_to_str
 
 from .solver_interface import SolverInterface
+from .acados_utils import scaled_control_bounds
 from ..interfaces import Solver
 from ..misc.enums import Node, SolverType, PhaseDynamics
 from ..limits.objective_functions import ObjectiveFunction, ObjectiveFcn
 from ..limits.path_conditions import Bounds
 from ..misc.enums import InterpolationType
+from ..optimization.solution.solution import Solution
 
 
 from ..misc.parameters_types import (
@@ -19,6 +24,178 @@ from ..misc.parameters_types import (
     Bool,
     AnyListorDict,
 )
+
+_ACADOS_TIMING_FIELDS = (
+    "time_tot",
+    "time_lin",
+    "time_sim",
+    "time_sim_ad",
+    "time_sim_la",
+    "time_qp",
+    "time_qp_solver_call",
+    "time_qp_xcond",
+    "time_glob",
+    "time_qpscaling",
+    "time_reg",
+    "time_preparation",
+    "time_feedback",
+)
+
+_ACADOS_WARM_START_FIELDS = ("x", "u", "pi", "lam", "sl", "su")
+_ACADOS_SOLVER_STATE_FORMAT_VERSION = 1
+
+
+def _get_acados_runtime_parameters(nlp) -> np.ndarray:
+    """Flatten Bioptim numerical time series in the same order as their symbolic variables."""
+
+    if nlp.numerical_data_timeseries is None:
+        return np.zeros((0, nlp.ns + 1))
+
+    runtime_parameters = []
+    for key, values in nlp.numerical_data_timeseries.items():
+        if values.ndim != 3 or values.shape[2] != nlp.ns + 1:
+            raise ValueError(
+                f"numerical_data_timeseries['{key}'] must have shape (n_values, n_components, {nlp.ns + 1}), "
+                f"got {values.shape}."
+            )
+        for component_index in range(values.shape[1]):
+            runtime_parameters.append(np.asarray(values[:, component_index, :], dtype=float))
+
+    return np.vstack(runtime_parameters) if runtime_parameters else np.zeros((0, nlp.ns + 1))
+
+
+def _scaled_state_initial_guess(nlp, node: int) -> np.ndarray:
+    """Return one state initial-guess node in ACADOS decision-variable units."""
+
+    x_init = np.empty((nlp.states.shape,))
+    for key in nlp.states.keys():
+        index = nlp.states[key].index
+        nlp.x_init[key].check_and_adjust_dimensions(nlp.states[key].shape, nlp.ns)
+        physical_value = np.asarray(nlp.x_init[key].init.evaluate_at(node), dtype=float).reshape(-1)
+        scaling = np.asarray(nlp.x_scaling[key].scaling[:, 0], dtype=float).reshape(-1)
+        x_init[index] = physical_value / scaling
+    return x_init
+
+
+def _safe_acados_stat(acados_solver: AcadosOcpSolver, field: Str, errors: dict) -> int | float | np.ndarray | None:
+    """Read a diagnostic value without masking an otherwise usable solve."""
+
+    try:
+        value = acados_solver.get_stats(field)
+    except Exception as exc:  # Diagnostics must remain available after partial solver failures.
+        errors[field] = f"{type(exc).__name__}: {exc}"
+        return None
+
+    if isinstance(value, np.ndarray):
+        return value.copy()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _statistics_solver_details(statistics: np.ndarray | None, nlp_solver_type: Str) -> dict:
+    """Extract solver-independent QP histories from Acados' solver-specific table."""
+
+    details = {
+        "qp_status": None,
+        "qp_iterations": None,
+        "qp_iterations_per_solve": None,
+        "step_sizes": None,
+    }
+    if statistics is None or statistics.ndim != 2 or statistics.size == 0:
+        return details
+
+    if nlp_solver_type == "SQP" and statistics.shape[0] >= 8:
+        details["qp_status"] = statistics[5, :].copy()
+        details["qp_iterations"] = statistics[6, :].copy()
+        details["step_sizes"] = statistics[7, :].copy()
+    elif nlp_solver_type == "SQP_RTI" and statistics.shape[0] >= 3:
+        details["qp_status"] = statistics[1, :].copy()
+        details["qp_iterations"] = statistics[2, :].copy()
+    elif nlp_solver_type == "DDP" and statistics.shape[0] >= 8:
+        details["qp_status"] = statistics[5, :].copy()
+        details["qp_iterations"] = statistics[6, :].copy()
+        details["step_sizes"] = statistics[7, :].copy()
+    elif nlp_solver_type == "SQP_WITH_FEASIBLE_QP" and statistics.shape[0] >= 14:
+        details["qp_status"] = statistics[[5, 7, 9], :].T.copy()
+        details["qp_iterations_per_solve"] = statistics[[6, 8, 10], :].T.copy()
+        details["qp_iterations"] = np.sum(details["qp_iterations_per_solve"], axis=1)
+        details["step_sizes"] = statistics[11, :].copy()
+
+    return details
+
+
+def _collect_acados_diagnostics(
+    acados_solver: AcadosOcpSolver,
+    status: int | None,
+    nlp_solver_type: Str,
+    qp_solver: Str,
+) -> dict:
+    """Create an immutable snapshot of the public diagnostics exposed by Acados v0.5.5."""
+
+    errors = {}
+    raw_statistics = _safe_acados_stat(acados_solver, "statistics", errors)
+    raw_statistics = np.asarray(raw_statistics, dtype=float) if raw_statistics is not None else None
+    solver_details = _statistics_solver_details(raw_statistics, nlp_solver_type)
+
+    try:
+        residual_values = np.asarray(acados_solver.get_residuals(recompute=False), dtype=float).reshape(-1).copy()
+    except Exception as exc:  # Diagnostics must remain available after partial solver failures.
+        errors["residuals"] = f"{type(exc).__name__}: {exc}"
+        residual_values = np.array([], dtype=float)
+
+    residuals = None
+    if residual_values.size >= 4:
+        residuals = dict(
+            zip(
+                ("stationarity", "dynamics", "inequality", "complementarity"),
+                (float(value) for value in residual_values[:4]),
+            )
+        )
+
+    timings = {
+        field: value
+        for field in _ACADOS_TIMING_FIELDS
+        if (value := _safe_acados_stat(acados_solver, field, errors)) is not None
+    }
+    status_value = -1 if status is None else int(status)
+    diagnostics = {
+        "status": status,
+        "status_label": status_to_str(status_value),
+        "successful": status == 0,
+        "nlp_solver_type": nlp_solver_type,
+        "qp_solver": qp_solver,
+        "residuals": residuals,
+        "nlp_iterations": _safe_acados_stat(acados_solver, "nlp_iter", errors),
+        "sqp_iterations": _safe_acados_stat(acados_solver, "sqp_iter", errors),
+        "qp_scaling_status": _safe_acados_stat(acados_solver, "qpscaling_status", errors),
+        "timings": timings,
+        "raw_statistics": raw_statistics,
+        **solver_details,
+    }
+    if errors:
+        diagnostics["unavailable_statistics"] = errors
+    return diagnostics
+
+
+def _configure_acados_codegen(acados_ocp: AcadosOcp, solver_options: Solver.ACADOS) -> None:
+    """Configure code generation with the Acados v0.5.5 API."""
+
+    if not hasattr(acados_ocp, "code_gen_options"):
+        raise RuntimeError(
+            "This version of bioptim requires Acados v0.5.5 or newer. "
+            "Please reinstall Acados using the scripts from bioptim/external."
+        )
+
+    code_gen_options = acados_ocp.code_gen_options
+    if solver_options.acados_dir:
+        acados_dir = Path(solver_options.acados_dir).expanduser().resolve()
+        code_gen_options.acados_include_path = str(acados_dir / "include")
+        code_gen_options.acados_lib_path = str(acados_dir / "lib")
+
+    code_export_directory = Path(solver_options.c_generated_code_path).expanduser().resolve()
+    code_gen_options.code_export_directory = str(code_export_directory)
+    code_gen_options.json_file = str(code_export_directory / "acados_ocp.json")
 
 
 class AcadosInterface(SolverInterface):
@@ -85,6 +262,8 @@ class AcadosInterface(SolverInterface):
         Update the ACADOS solver to new values
     get_optimized_value(self) -> list[dict] | dict
         Get the previously optimized solution
+    get_diagnostics(self) -> dict
+        Get a snapshot of the diagnostics from the previous solver call
     solve(self) -> "AcadosInterface"
         Solve the prepared ocp
     """
@@ -115,8 +294,8 @@ class AcadosInterface(SolverInterface):
             solver_options = Solver.ACADOS()
         self.opts = solver_options
 
-        self.acados_ocp = AcadosOcp(acados_path=solver_options.acados_dir)
-        self.acados_ocp.code_export_directory = solver_options.c_generated_code_path
+        self.acados_ocp = AcadosOcp()
+        _configure_acados_codegen(self.acados_ocp, solver_options)
         self.acados_model = AcadosModel()
 
         self.__set_cost_type(solver_options.cost_type)
@@ -138,6 +317,8 @@ class AcadosInterface(SolverInterface):
         self.status = None
         self.out = {}
         self.real_time_to_optimize = -1
+        self._runtime_parameter_values = None
+        self._warm_start_solver_state = None
 
         self.all_constr = None
         self.end_constr = SX()
@@ -196,12 +377,17 @@ class AcadosInterface(SolverInterface):
         self.acados_model.x = x_sym
         self.acados_model.xdot = x_dot_sym
         self.acados_model.u = u_sym
+        self.acados_model.p = d
         self.acados_model.con_h_expr_0 = np.zeros((0, 0))
         self.acados_model.con_h_expr = np.zeros((0, 0))
         self.acados_model.con_h_expr_e = np.zeros((0, 0))
-        self.acados_model.p = []
         if not self.opts.acados_model_name:
-            if self.opts.c_compile:
+            if self.opts.check_reuse_possible:
+                raise RuntimeError(
+                    "Acados code reuse requires a stable model name. "
+                    "Please call Solver.ACADOS.set_acados_model_name(...)."
+                )
+            elif self.opts.c_compile:
                 now = datetime.now()  # current date and time
                 self.acados_model.name = f"model_{now.strftime('%Y_%m_%d_%H%M%S%f')[:-4]}"
             else:
@@ -233,6 +419,11 @@ class AcadosInterface(SolverInterface):
         self.acados_ocp.dims.nx = ocp.nlp[0].parameters.shape + ocp.nlp[0].states.shape
         self.acados_ocp.dims.nu = ocp.nlp[0].controls.shape
         self.acados_ocp.solver_options.N_horizon = ocp.nlp[0].ns
+        runtime_parameters = _get_acados_runtime_parameters(ocp.nlp[0])
+        # Keep code-generation metadata independent of mutable numerical data.
+        # Every stage receives the current values in __update_runtime_parameters
+        # before the first solve, including when an existing library is reused.
+        self.acados_ocp.parameter_values = np.zeros(runtime_parameters.shape[0])
 
     def __set_constr_type(self, constr_type: Str = "BGH") -> None:
         """
@@ -292,25 +483,42 @@ class AcadosInterface(SolverInterface):
                     "to a big value instead."
                 )
 
+        self.start_constr = SX()
         self.all_constr = SX()
         self.end_constr = SX()
         # TODO:change for more node flexibility on bounds
+        self.start_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         self.all_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         self.end_g_bounds = Bounds(None, interpolation=InterpolationType.CONSTANT)
         for i, nlp in enumerate(ocp.nlp):
             t = nlp.time_cx
             dt = nlp.dt
-            x = nlp.states.cx_start
-            u = nlp.controls.cx_start
+            # Penalty functions are declared with the scaled optimization variables
+            # as inputs (see PenaltyOption.get_variable_inputs). Passing their
+            # unscaled counterparts here would therefore apply the variable scaling
+            # a second time inside the penalty function.
+            x = nlp.states.scaled.cx_start
+            u = nlp.controls.scaled.cx_start
             p = nlp.parameters.scaled.cx
-            a = nlp.algebraic_states.cx_start
+            a = nlp.algebraic_states.scaled.cx_start
             d = nlp.numerical_timeseries.cx
 
             for g, G in enumerate(nlp.g):
                 if not G:
                     continue
 
-                if G.node[0] == Node.ALL or G.node[0] == Node.ALL_SHOOTING:
+                if G.node[0] == Node.START:
+                    x_tp = x
+                    u_tp = u
+                    if x.shape[0] * 2 == G.function[0].size_in("x")[0]:
+                        x_tp = vertcat(x_tp, x_tp)
+                    if u.shape[0] * 2 == G.function[0].size_in("u")[0]:
+                        u_tp = vertcat(u_tp, u_tp)
+
+                    self.start_constr = vertcat(self.start_constr, G.function[0](t, dt, x_tp, u_tp, p, a, d))
+                    self.start_g_bounds.concatenate(G.bounds)
+
+                elif G.node[0] == Node.ALL or G.node[0] == Node.ALL_SHOOTING:
                     x_tp = x
                     u_tp = u
                     if x.shape[0] * 2 == G.function[0].size_in("x")[0]:
@@ -337,10 +545,11 @@ class AcadosInterface(SolverInterface):
 
                 else:
                     raise RuntimeError(
-                        "Except for states and controls, Acados solver only handles constraints on last or all nodes."
+                        "Except for states and controls, Acados solver only handles constraints on start, last, "
+                        "all-shooting, or all nodes."
                     )
 
-        self.acados_model.con_h_expr_0 = self.all_constr
+        self.acados_model.con_h_expr_0 = vertcat(self.start_constr, self.all_constr)
         self.acados_model.con_h_expr = self.all_constr
         self.acados_model.con_h_expr_e = self.end_constr
 
@@ -368,16 +577,9 @@ class AcadosInterface(SolverInterface):
                 self.x_bound_min[index, i] = x_tp.min[:, i]
 
         # setup control constraints
-        u_bounds_max = np.ndarray((self.acados_ocp.dims.nu, 1))
-        u_bounds_min = np.ndarray((self.acados_ocp.dims.nu, 1))
-        for key in ocp.nlp[0].controls.keys():
-            u_tp = ocp.nlp[0].u_bounds[key].scale(ocp.nlp[0].u_scaling[key].scaling)
-            index = ocp.nlp[0].controls[key].index
-            u_bounds_max[index, 0] = np.array(u_tp.max[:, 0])
-            u_bounds_min[index, 0] = np.array(u_tp.min[:, 0])
-
-        self.acados_ocp.constraints.lbu = u_bounds_max
-        self.acados_ocp.constraints.ubu = u_bounds_min
+        u_bounds_min, u_bounds_max = scaled_control_bounds(ocp.nlp[0])
+        self.acados_ocp.constraints.lbu = u_bounds_min[:, np.newaxis]
+        self.acados_ocp.constraints.ubu = u_bounds_max[:, np.newaxis]
         self.acados_ocp.constraints.idxbu = np.array(range(self.acados_ocp.dims.nu))
         self.acados_ocp.dims.nbu = self.acados_ocp.dims.nu
 
@@ -403,8 +605,12 @@ class AcadosInterface(SolverInterface):
         self.acados_ocp.dims.nbx_e = self.acados_ocp.dims.nx
 
         # setup algebraic constraint
-        self.acados_ocp.constraints.lh_0 = np.array(self.all_g_bounds.min[:, 0])
-        self.acados_ocp.constraints.uh_0 = np.array(self.all_g_bounds.max[:, 0])
+        self.acados_ocp.constraints.lh_0 = np.concatenate(
+            (np.array(self.start_g_bounds.min[:, 0]), np.array(self.all_g_bounds.min[:, 0]))
+        )
+        self.acados_ocp.constraints.uh_0 = np.concatenate(
+            (np.array(self.start_g_bounds.max[:, 0]), np.array(self.all_g_bounds.max[:, 0]))
+        )
         self.acados_ocp.constraints.lh = np.array(self.all_g_bounds.min[:, 0])
         self.acados_ocp.constraints.uh = np.array(self.all_g_bounds.max[:, 0])
         self.acados_ocp.constraints.lh_e = np.array(self.end_g_bounds.min[:, 0])
@@ -751,10 +957,48 @@ class AcadosInterface(SolverInterface):
         else:
             raise RuntimeError("Available acados cost type: 'LINEAR_LS', 'NONLINEAR_LS' and 'EXTERNAL'.")
 
+    def __update_runtime_parameters(self) -> None:
+        """Update node-wise numerical data without regenerating the Acados solver."""
+
+        runtime_parameters = _get_acados_runtime_parameters(self.ocp.nlp[0])
+        expected_size = int(self.acados_model.p.shape[0])
+        if runtime_parameters.shape[0] != expected_size:
+            raise RuntimeError(
+                "The numerical time-series structure changed after the Acados model was generated. "
+                f"Expected {expected_size} runtime parameters per node, got {runtime_parameters.shape[0]}. "
+                "Create a new OptimalControlProgram to change their number."
+            )
+
+        if expected_size == 0:
+            self._runtime_parameter_values = runtime_parameters
+            return
+
+        for stage in range(self.acados_ocp.solver_options.N_horizon + 1):
+            stage_values = np.ascontiguousarray(runtime_parameters[:, stage], dtype=np.float64)
+            if self._runtime_parameter_values is None:
+                self.ocp_solver.set(stage, "p", stage_values)
+                continue
+
+            changed_indices = np.flatnonzero(stage_values != self._runtime_parameter_values[:, stage])
+            if changed_indices.size == 0:
+                continue
+            if changed_indices.size == expected_size:
+                self.ocp_solver.set(stage, "p", stage_values)
+            else:
+                self.ocp_solver.set_params_sparse(
+                    stage,
+                    changed_indices,
+                    np.ascontiguousarray(stage_values[changed_indices], dtype=np.float64),
+                )
+
+        self._runtime_parameter_values = runtime_parameters.copy()
+
     def __update_solver(self):
         """
         Update the ACADOS solver to new values
         """
+
+        self.__update_runtime_parameters()
 
         param_init = []
         for key in self.ocp.nlp[0].parameters.keys():
@@ -782,15 +1026,7 @@ class AcadosInterface(SolverInterface):
             # self.ocp_solver.cost_set(n, "W", self.W)
 
             # The x_init need to be ordered by index that's why we use a for loop
-            x_init = np.ndarray((self.ocp.nlp[0].states.shape))
-            for key in self.ocp.nlp[0].states.keys():
-                index = self.ocp.nlp[0].states[key].index
-                self.ocp.nlp[0].x_init[key].check_and_adjust_dimensions(
-                    self.ocp.nlp[0].states[key].shape, self.ocp.nlp[0].ns
-                )
-                x_init[index] = (
-                    self.ocp.nlp[0].x_init[key].init.evaluate_at(n) / self.ocp.nlp[0].x_scaling[key].scaling[:, 0]
-                )
+            x_init = _scaled_state_initial_guess(self.ocp.nlp[0], n)
 
             self.ocp_solver.set(n, "x", np.concatenate((param_init, x_init)))
 
@@ -808,18 +1044,23 @@ class AcadosInterface(SolverInterface):
             self.ocp_solver.set(n, "u", u_init)
 
             # The u_bounds need to be ordered by index that's why we use a for loop
-            u_bounds_max = np.ndarray(self.acados_ocp.dims.nu)
-            u_bounds_min = np.ndarray(self.acados_ocp.dims.nu)
-            for key in self.ocp.nlp[0].controls.keys():
-                u_tp = self.ocp.nlp[0].u_bounds[key]
-                index = self.ocp.nlp[0].controls[key].index
-                u_bounds_max[index] = np.array(u_tp.max[:, 0])
-                u_bounds_min[index] = np.array(u_tp.min[:, 0])
-
+            u_bounds_min, u_bounds_max = scaled_control_bounds(self.ocp.nlp[0])
             self.ocp_solver.constraints_set(n, "lbu", u_bounds_min)
             self.ocp_solver.constraints_set(n, "ubu", u_bounds_max)
-            self.ocp_solver.constraints_set(n, "uh", self.all_g_bounds.max[:, 0])
-            self.ocp_solver.constraints_set(n, "lh", self.all_g_bounds.min[:, 0])
+            if n == 0:
+                self.ocp_solver.constraints_set(
+                    n,
+                    "uh",
+                    np.concatenate((self.start_g_bounds.max[:, 0], self.all_g_bounds.max[:, 0])),
+                )
+                self.ocp_solver.constraints_set(
+                    n,
+                    "lh",
+                    np.concatenate((self.start_g_bounds.min[:, 0], self.all_g_bounds.min[:, 0])),
+                )
+            else:
+                self.ocp_solver.constraints_set(n, "uh", self.all_g_bounds.max[:, 0])
+                self.ocp_solver.constraints_set(n, "lh", self.all_g_bounds.min[:, 0])
 
         # Final
         if self.y_ref_end:
@@ -841,10 +1082,7 @@ class AcadosInterface(SolverInterface):
             self.ocp_solver.constraints_set(self.acados_ocp.solver_options.N_horizon, "lh", self.end_g_bounds.min[:, 0])
 
         # The x_init need to be ordered by index that's why we use a for loop
-        x_init = np.ndarray((self.ocp.nlp[0].states.shape,))
-        for key in self.ocp.nlp[0].states.keys():
-            index = self.ocp.nlp[0].states[key].index
-            x_init[index] = self.ocp.nlp[0].x_init[key].init.evaluate_at(self.acados_ocp.solver_options.N_horizon)
+        x_init = _scaled_state_initial_guess(self.ocp.nlp[0], self.acados_ocp.solver_options.N_horizon)
 
         self.ocp_solver.set(self.acados_ocp.solver_options.N_horizon, "x", np.concatenate((param_init, x_init)))
 
@@ -867,6 +1105,7 @@ class AcadosInterface(SolverInterface):
         acados_x = acados_x[n_params:, :]
         acados_u = np.array([self.ocp_solver.get(i, "u") for i in range(ns)]).T
 
+        diagnostics = self.get_diagnostics()
         out = {
             "x": [],
             "u": acados_u,
@@ -875,6 +1114,8 @@ class AcadosInterface(SolverInterface):
             "iter": self.ocp_solver.get_stats("sqp_iter"),
             "status": self.status,
             "solver": SolverType.ACADOS,
+            "solver_diagnostics": diagnostics,
+            "solver_state": self.get_solver_state(),
         }
 
         out["x"] = vertcat(out["x"], acados_x.reshape(-1, 1, order="F"))
@@ -893,6 +1134,160 @@ class AcadosInterface(SolverInterface):
 
         return out[0] if len(out) == 1 else out
 
+    def get_solver_state(self) -> dict | None:
+        """
+        Capture a detached Acados primal-dual iterate for an exact warm start.
+
+        The payload is intentionally opaque to the generic Solution API. Algebraic
+        variables are not included until the Acados interface supports them.
+        """
+
+        if self.ocp_solver is None:
+            return None
+
+        iterate = self.ocp_solver.get_flat_iterate()
+        return {
+            "solver": SolverType.ACADOS.value,
+            "format_version": _ACADOS_SOLVER_STATE_FORMAT_VERSION,
+            "n_horizon": self.acados_ocp.solver_options.N_horizon,
+            "iterate": {
+                field: np.asarray(getattr(iterate, field), dtype=float).copy() for field in _ACADOS_WARM_START_FIELDS
+            },
+        }
+
+    def set_lagrange_multiplier(self, sol: Solution) -> None:
+        """
+        Queue the Acados solver state carried by a Solution for the next solve.
+
+        This method implements the common Bioptim warm-start hook. When the
+        Solution has no Acados state, the existing state/control initial-guess
+        path remains active and no dual iterate is restored.
+        """
+
+        solver_state = sol.solver_state
+        if solver_state is None:
+            self._warm_start_solver_state = None
+            return
+
+        if not isinstance(solver_state, dict) or solver_state.get("solver") != SolverType.ACADOS.value:
+            raise ValueError("The warm-start solver state is not an Acados state.")
+        if solver_state.get("format_version") != _ACADOS_SOLVER_STATE_FORMAT_VERSION:
+            raise ValueError(
+                "Unsupported Acados warm-start state format "
+                f"{solver_state.get('format_version')}; expected {_ACADOS_SOLVER_STATE_FORMAT_VERSION}."
+            )
+        if solver_state.get("n_horizon") != self.acados_ocp.solver_options.N_horizon:
+            raise ValueError(
+                "The Acados warm-start state uses a different number of shooting intervals. "
+                "Grid-changing warm starts require interpolation and are not implemented yet."
+            )
+
+        iterate = solver_state.get("iterate")
+        if not isinstance(iterate, dict) or any(field not in iterate for field in _ACADOS_WARM_START_FIELDS):
+            raise ValueError("The Acados warm-start state must contain x, u, pi, lam, sl, and su flattened iterates.")
+        self._warm_start_solver_state = deepcopy(solver_state)
+
+    def __restore_solver_state(self) -> None:
+        """Restore the queued Acados iterate after numerical inputs and primal guesses are updated."""
+
+        if self._warm_start_solver_state is None:
+            return
+
+        solver_state = self._warm_start_solver_state
+        self._warm_start_solver_state = None
+        for field in _ACADOS_WARM_START_FIELDS:
+            values = np.ascontiguousarray(solver_state["iterate"][field], dtype=float)
+            expected_size = self.ocp_solver.get_dim_flat(field)
+            if values.ndim != 1 or values.shape[0] != expected_size:
+                raise ValueError(
+                    f"The Acados warm-start field '{field}' has size {values.size}; expected {expected_size}. "
+                    "The solver structure must match exactly for a primal-dual warm start."
+                )
+            if expected_size:
+                self.ocp_solver.set_flat(field, values)
+
+    def get_diagnostics(self) -> dict:
+        """
+        Get a snapshot of the public diagnostics from the previous Acados solve.
+
+        The returned values are detached from the mutable Acados capsule, so they
+        remain valid when the same solver is reused for a subsequent solve.
+        """
+
+        if self.ocp_solver is None:
+            return {
+                "status": self.status,
+                "status_label": status_to_str(-1),
+                "successful": False,
+                "nlp_solver_type": self.opts.nlp_solver_type,
+                "qp_solver": self.opts.qp_solver,
+                "residuals": None,
+                "nlp_iterations": None,
+                "sqp_iterations": None,
+                "qp_scaling_status": None,
+                "timings": {},
+                "raw_statistics": None,
+                "qp_status": None,
+                "qp_iterations": None,
+                "qp_iterations_per_solve": None,
+                "step_sizes": None,
+            }
+
+        return _collect_acados_diagnostics(
+            self.ocp_solver,
+            status=self.status,
+            nlp_solver_type=self.acados_ocp.solver_options.nlp_solver_type,
+            qp_solver=self.acados_ocp.solver_options.qp_solver,
+        )
+
+    def initialize_solver(self):
+        """Create and populate the native Acados solver without solving the NLP.
+
+        This is useful when an application must use the generated dynamics
+        capsule to prepare an initial guess before the first SQP linearization.
+        A subsequent call to :meth:`solve` reuses the same native solver and
+        refreshes its numerical data from the OCP.
+        """
+
+        # Populate costs and constraints vectors before code generation.
+        self.__set_costs(self.ocp)
+        self.__set_constraints(self.ocp)
+
+        options = self.opts.as_dict(self)
+        if self.ocp_solver is None:
+            for key in options:
+                setattr(self.acados_ocp.solver_options, key, options[key])
+            self.ocp_solver = AcadosOcpSolver(
+                self.acados_ocp,
+                json_file=self.acados_ocp.code_gen_options.json_file,
+                build=False if self.opts.check_reuse_possible else self.opts.c_compile,
+                generate=not self.opts.check_reuse_possible,
+                check_reuse_possible=self.opts.check_reuse_possible,
+                tol_code_reuse=self.opts.tol_code_reuse,
+            )
+            self.opts.set_only_first_options_has_changed(False)
+            self.opts.set_has_tolerance_changed(False)
+
+        else:
+            if self.opts.only_first_options_has_changed:
+                raise RuntimeError(
+                    "Some options has been changed the second time acados was run.",
+                    "Only " + str(Solver.ACADOS.get_tolerance_keys()) + " can be modified.",
+                )
+
+            if self.opts.reset_solver_before_solve:
+                self.ocp_solver.reset()
+
+            if self.opts.has_tolerance_changed:
+                for key in self.opts.get_tolerance_keys():
+                    short_key = key[12:]
+                    self.ocp_solver.options_set(short_key, options[key[1:]])
+                self.opts.set_has_tolerance_changed(False)
+
+        self.__update_solver()
+        self.__restore_solver_state()
+        return self.ocp_solver
+
     def solve(self, expand_during_shake_tree: Bool = False) -> AnyListorDict:
         """
         Solve the prepared ocp
@@ -908,32 +1303,7 @@ class AcadosInterface(SolverInterface):
         """
 
         tic = perf_counter()
-        # Populate costs and constraints vectors
-        self.__set_costs(self.ocp)
-        self.__set_constraints(self.ocp)
-
-        options = self.opts.as_dict(self)
-        if self.ocp_solver is None:
-            for key in options:
-                setattr(self.acados_ocp.solver_options, key, options[key])
-            self.ocp_solver = AcadosOcpSolver(self.acados_ocp, json_file="acados_ocp.json", build=self.opts.c_compile)
-            self.opts.set_only_first_options_has_changed(False)
-            self.opts.set_has_tolerance_changed(False)
-
-        else:
-            if self.opts.only_first_options_has_changed:
-                raise RuntimeError(
-                    "Some options has been changed the second time acados was run.",
-                    "Only " + str(Solver.ACADOS.get_tolerance_keys()) + " can be modified.",
-                )
-
-            if self.opts.has_tolerance_changed:
-                for key in self.opts.get_tolerance_keys():
-                    short_key = key[12:]
-                    self.ocp_solver.options_set(short_key, options[key[1:]])
-                self.opts.set_has_tolerance_changed(False)
-
-        self.__update_solver()
+        self.initialize_solver()
         self.status = self.ocp_solver.solve()
         self.real_time_to_optimize = perf_counter() - tic
         return self.get_optimized_value()

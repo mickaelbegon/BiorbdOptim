@@ -70,6 +70,7 @@ class FATROP(GenericSolver):
     _warm_start_init_point: bool = False
     _warm_start_mult_bound_push: Float = 0.001
     _bound_push: Float = 0.01
+    _bound_tightening_factor: Float = 0.0
     _print_level: Int = 5
     _c_compile: Bool = False
 
@@ -110,6 +111,10 @@ class FATROP(GenericSolver):
         return self._bound_push
 
     @property
+    def bound_tightening_factor(self) -> Float:
+        return self._bound_tightening_factor
+
+    @property
     def print_level(self) -> Int:
         return self._print_level
 
@@ -140,6 +145,11 @@ class FATROP(GenericSolver):
 
     def set_bound_push(self, val: Float) -> None:
         self._bound_push = val
+
+    def set_bound_tightening_factor(self, val: Float) -> None:
+        if val < 0:
+            raise ValueError("bound_tightening_factor must be non-negative.")
+        self._bound_tightening_factor = val
 
     def set_print_level(self, num: Int) -> None:
         self._print_level = num
@@ -197,6 +207,7 @@ class FATROP(GenericSolver):
             "online_optim",
             "show_options",
             "_structure_detection",
+            "_bound_tightening_factor",
         ]
         for key in solver_options:
             if key not in non_python_options:
