@@ -217,6 +217,7 @@ from .models.biorbd.model_dynamics import (
     JointAccelerationBiorbdModel,
     MultiTorqueBiorbdModel,
 )
+from .models.pinocchio import PinocchioModel, TorquePinocchioModel
 from .models.protocols.biomodel import BioModel
 from .models.protocols.holonomic_constraints import HolonomicConstraintsFcn, HolonomicConstraintsList
 from .models.protocols.stochastic_biomodel import StochasticBioModel
@@ -245,6 +246,9 @@ from .optimization.receding_horizon_optimization import (
     CyclicNonlinearModelPredictiveControl,
     CyclicMovingHorizonEstimator,
     MultiCyclicNonlinearModelPredictiveControl,
+    RecedingHorizonFailurePolicy,
+    RecedingHorizonWindowResult,
+    CyclicVariableShift,
 )
 from .optimization.receding_horizon_optimization import MovingHorizonEstimator, NonlinearModelPredictiveControl
 from .optimization.solution.solution import Solution
