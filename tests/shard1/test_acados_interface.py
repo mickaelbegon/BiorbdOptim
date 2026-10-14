@@ -14,7 +14,7 @@ from unittest.mock import Mock, call, patch
 import numpy as np
 import numpy.testing as npt
 import pytest
-from casadi import Function
+from casadi import Function, vertcat
 
 from bioptim import (
     TorqueBiorbdModel,
@@ -36,8 +36,8 @@ from bioptim import (
 from tests.utils import TestUtils
 
 
-def _physical_state_control_constraint_with_scaling(controller):
-    return controller.states["q"][1] + controller.controls["tau"][0]
+def physical_state_control_constraint_with_scaling(controller):
+    return controller.states["q"].cx[1] + controller.controls["tau"].cx[0]
 
 
 def test_acados_v055_diagnostics_snapshot():
@@ -518,7 +518,7 @@ def test_acados_v055_solver_modes(solver_mode):
         assert acados_options.nlp_solver_type == "SQP_WITH_FEASIBLE_QP"
         assert acados_options.byrd_omojokon_slack_relaxation_factor == 1.01
 
-    os.remove("./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree("./c_generated_code/")
 
 
@@ -542,7 +542,7 @@ def test_acados_no_obj(cost_type):
     sol = ocp.solve(solver=solver)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -575,7 +575,7 @@ def test_acados_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], 1.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -610,7 +610,7 @@ def test_acados_mayer_first_node(cost_type):
     npt.assert_almost_equal(q[0, 0], 0.999999948505021)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -647,7 +647,7 @@ def test_acados_several_mayer(cost_type):
     npt.assert_almost_equal(q[2, -1], 3.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -692,7 +692,7 @@ def test_acados_one_lagrange(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -740,7 +740,7 @@ def test_acados_one_lagrange_and_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze(), decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -779,7 +779,7 @@ def test_acados_control_lagrange_and_state_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], target.squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -814,7 +814,7 @@ def test_acados_options(cost_type):
         npt.assert_array_less(iter[i + 1], iter[i])
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -975,7 +975,7 @@ def test_acados_one_parameter():
     npt.assert_almost_equal(gravity[-1], -9.80995, decimal=4)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -1052,7 +1052,7 @@ def test_acados_several_parameter():
     npt.assert_almost_equal(mass[0], 20, decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -1174,7 +1174,7 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path, constraint_node)
     )
     constraints = ConstraintList()
     constraints.add(
-        _physical_state_control_constraint_with_scaling,
+        physical_state_control_constraint_with_scaling,
         node=constraint_node,
         min_bound=-1e6,
         max_bound=1e6,
@@ -1188,11 +1188,12 @@ def test_acados_constraints_use_scaled_penalty_inputs(tmp_path, constraint_node)
 
     nlp = ocp.nlp[0]
     penalty = next(constraint for constraint in nlp.g if constraint)
+    # Custom penalties declare both start and end state/control inputs.
     expected_expression = penalty.function[0](
         nlp.time_cx,
         nlp.dt,
-        nlp.states.scaled.cx_start,
-        nlp.controls.scaled.cx_start,
+        vertcat(nlp.states.scaled.cx_start, nlp.states.scaled.cx_start),
+        vertcat(nlp.controls.scaled.cx_start, nlp.controls.scaled.cx_start),
         nlp.parameters.scaled.cx,
         nlp.algebraic_states.scaled.cx_start,
         nlp.numerical_timeseries.cx,
