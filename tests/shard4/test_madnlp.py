@@ -44,8 +44,7 @@ def test_madnlp_casadi_plugin_and_warm_start_inputs():
 
 def test_madnlp_linear_solver_backends():
     """Verify that libMad selects the requested backend instead of falling back to MUMPS."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import casadi as cas
         from bioptim import Solver
 
@@ -65,15 +64,16 @@ def test_madnlp_linear_solver_backends():
             result = solver(x0=[0, 0], lbg=3, ubg=3)
             assert solver.stats()["success"]
             assert abs(float(result["f"])) <= 1e-10
-        """
-    )
+        """)
     process = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     output = process.stdout + process.stderr
 
     assert process.returncode == 0, output
-    assert "running with MUMPS" in output
-    assert "running with umfpack" in output
-    assert "running with Lapack-CPU" in output
+    assert "running with mumps" in output.lower()
+    assert "running with umfpack" in output.lower()
+    assert "running with lapack-cpu" in output.lower()
+    assert "not supported" not in output.lower()
+    assert "unknown type" not in output.lower()
 
 
 @pytest.mark.skipif(
@@ -82,8 +82,7 @@ def test_madnlp_linear_solver_backends():
 )
 def test_madnlp_pardiso_mkl_backend():
     """Verify that all PARDISO profiles select the intended libMad backend."""
-    script = textwrap.dedent(
-        """
+    script = textwrap.dedent("""
         import casadi as cas
         from bioptim import Solver
 
@@ -102,8 +101,7 @@ def test_madnlp_pardiso_mkl_backend():
             result = solver(x0=[0, 0], lbg=3, ubg=3)
             assert solver.stats()["success"]
             assert abs(float(result["f"])) <= 1e-10
-        """
-    )
+        """)
     process = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, check=False)
     output = process.stdout + process.stderr
 

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import casadi as cas
+from packaging.version import parse as parse_version
 
 from .abstract_options import GenericSolver
 from ..misc.enums import OnlineOptim, SolverType
@@ -14,7 +15,6 @@ from ..misc.parameters_types import (
     Int,
     Str,
 )
-
 
 MADNLP_UNAVAILABLE = (
     "The CasADi MadNLP plugin is not available in the installed CasADi build. "
@@ -134,9 +134,8 @@ class MADNLP(GenericSolver):
     def set_linear_solver(self, value: Str) -> None:
         """Select a CPU linear solver bundled in the current MadNLP ``libMad`` runtime.
 
-        ``libMad`` expects Julia type names rather than the lowercase names shown
-        by solver banners. Bioptim accepts both forms and emits the canonical
-        value, avoiding the runtime's silent fallback to MUMPS.
+        Bioptim accepts aliases and Julia type names. ``as_dict`` converts the
+        canonical type name for the C interface used by the installed CasADi.
         """
         if not isinstance(value, str):
             raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL")
@@ -192,11 +191,24 @@ class MADNLP(GenericSolver):
         self._c_compile = False
 
     def as_dict(self, solver) -> AnyDict:
+        linear_solver = self._linear_solver
+        print_level = self._print_level
+        if parse_version(cas.__version__).release < (3, 8):
+            # CasADi 3.7 uses madnlp_c, whose names and log levels differ from libMad.
+            legacy_linear_solvers = {
+                "MumpsSolver": "mumps",
+                "UmfpackSolver": "umfpack",
+                "LapackCPUSolver": "lapack_cpu",
+            }
+            if linear_solver not in legacy_linear_solvers:
+                raise NotImplementedError("MadNLP PARDISO requires CasADi 3.8 or newer with a PARDISO-enabled libMad")
+            linear_solver = legacy_linear_solvers[linear_solver]
+            print_level = 6 - print_level
         madnlp = {
             "tol": self._tol,
             "max_iter": self._max_iter,
-            "print_level": self._print_level,
-            "linear_solver": self._linear_solver,
+            "print_level": print_level,
+            "linear_solver": linear_solver,
             **self._madnlp_options,
         }
         return {"madnlp": madnlp, **solver.options_common}

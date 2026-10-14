@@ -31,7 +31,9 @@ CasADi accepts MadNLP-specific values in a nested `madnlp` dictionary. Bioptim
 maps convergence and constraint tolerance to MadNLP's single `tol` option,
 maximum iterations to `max_iter`, and output verbosity to `print_level`. The
 public log-level names are converted to the C interface values `TRACE=1`,
-`DEBUG=2`, `INFO=3`, `NOTICE=4`, `WARN=5`, and `ERROR=6`.
+`DEBUG=2`, `INFO=3`, `NOTICE=4`, `WARN=5`, and `ERROR=6` for CasADi 3.8's
+`libMad` interface. CasADi 3.7's older `madnlp_c` interface uses the reverse
+scale (`ERROR=0` through `TRACE=5`); Bioptim converts it automatically.
 `set_option_unsafe(value, name)` adds another value to that nested dictionary;
 the CasADi plugin validates its name and type when it constructs the solver.
 
@@ -49,12 +51,14 @@ An x86-64 runtime compiled with `MadNLPPardiso` can additionally expose
 Intel oneMKL, remains sparse, and reports the KKT inertia to MadNLP. It is not
 available on native ARM platforms.
 
-Select one with `solver.set_linear_solver(...)`. Bioptim translates these
-lowercase aliases to the Julia type names required by `libMad`
+Select one with `solver.set_linear_solver(...)`. For CasADi 3.8 and newer,
+Bioptim translates these lowercase aliases to the Julia type names required by `libMad`
 (`MumpsSolver`, `UmfpackSolver`, `LapackCPUSolver`, and
-`PardisoMKLSolver`). Passing the lowercase
-values directly through `set_option_unsafe` is not equivalent: current
-`libMad` builds warn and silently retain MUMPS.
+`PardisoMKLSolver`). CasADi 3.7's older `madnlp_c` interface requires the
+lowercase names; Bioptim converts them automatically. PARDISO requires
+CasADi 3.8 or newer with a PARDISO-enabled `libMad`. Passing the wrong form
+directly through `set_option_unsafe` can cause a warning and silent fallback
+to MUMPS.
 
 The selected `libMad` must contain `MadNLPPardiso`; otherwise older runtimes
 warn and silently retain MUMPS. Verify the MadNLP banner in deployment tests.

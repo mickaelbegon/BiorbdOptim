@@ -22,8 +22,20 @@ class FakeInterface:
         self.options_common = {}
 
 
-def test_madnlp_solver_options(monkeypatch):
+@pytest.mark.parametrize(
+    ("casadi_version", "backend", "linear_solver", "print_level"),
+    (
+        ("3.7.2", "mumps", "mumps", 5),
+        ("3.7.2", "umfpack", "umfpack", 5),
+        ("3.7.2", "lapack_cpu", "lapack_cpu", 5),
+        ("3.8.0", "mumps", "MumpsSolver", 1),
+        ("3.8.0", "umfpack", "UmfpackSolver", 1),
+        ("3.8.0", "lapack_cpu", "LapackCPUSolver", 1),
+    ),
+)
+def test_madnlp_solver_options(monkeypatch, casadi_version, backend, linear_solver, print_level):
     monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.cas.__version__", casadi_version)
     solver = Solver.MADNLP()
     assert solver.type == SolverType.MADNLP
 
@@ -31,16 +43,15 @@ def test_madnlp_solver_options(monkeypatch):
     solver.set_constraint_tolerance(2e-7)
     solver.set_maximum_iterations(42)
     solver.set_print_level(1)
-    solver.set_linear_solver("umfpack")
-    assert solver.linear_solver == "UmfpackSolver"
+    solver.set_linear_solver(backend)
     solver.set_option_unsafe("exact", "hessian_approximation")
     options = solver.as_dict(FakeSolver({"print_time": False}))
     assert options == {
         "madnlp": {
             "tol": 2e-7,
             "max_iter": 42,
-            "print_level": 1,
-            "linear_solver": "UmfpackSolver",
+            "print_level": print_level,
+            "linear_solver": linear_solver,
             "hessian_approximation": "exact",
         },
         "print_time": False,
@@ -97,6 +108,7 @@ def test_madnlp_rejects_unknown_linear_solver(monkeypatch):
 )
 def test_madnlp_pardiso_profiles(monkeypatch, profile, linear_solver, extra_options):
     monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.cas.__version__", "3.8.0")
     solver = Solver.MADNLP()
     solver.set_pardiso_profile(profile)
 
@@ -115,6 +127,7 @@ def test_madnlp_rejects_unknown_pardiso_profile(monkeypatch):
 
 def test_madnlp_switching_pardiso_profile_removes_owned_options(monkeypatch):
     monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.cas.__version__", "3.8.0")
     solver = Solver.MADNLP()
     solver.set_pardiso_profile("robust_inertia_free")
     solver.set_pardiso_profile("baseline")
@@ -127,6 +140,16 @@ def test_madnlp_switching_pardiso_profile_removes_owned_options(monkeypatch):
         "default_dual_regularization",
     )
     assert not any(key in options for key in profile_options)
+
+
+@pytest.mark.parametrize("linear_solver", ("pardiso_mkl", "robust_pardiso_mkl"))
+def test_madnlp_legacy_api_rejects_pardiso(monkeypatch, linear_solver):
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.has_madnlp", lambda: True)
+    monkeypatch.setattr("bioptim.interfaces.madnlp_options.cas.__version__", "3.7.2")
+    solver = Solver.MADNLP()
+    solver.set_linear_solver(linear_solver)
+    with pytest.raises(NotImplementedError, match="requires CasADi 3.8"):
+        solver.as_dict(FakeSolver({}))
 
 
 def test_madnlp_unavailable(monkeypatch):
