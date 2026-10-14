@@ -84,9 +84,7 @@ def nlpsol_available(name: str) -> tuple[bool, str | None]:
         available = bool(cas.has_nlpsol(name))
     except (RuntimeError, AttributeError) as error:
         return False, str(error)
-    return available, (
-        None if available else f"CasADi nlpsol plugin '{name}' is unavailable"
-    )
+    return available, (None if available else f"CasADi nlpsol plugin '{name}' is unavailable")
 
 
 def solver_available(name: str) -> tuple[bool, str | None]:
@@ -94,15 +92,11 @@ def solver_available(name: str) -> tuple[bool, str | None]:
         return nlpsol_available(name)
     if name == "acados":
         available = importlib.util.find_spec("acados_template") is not None
-        return available, (
-            None if available else "Python package 'acados_template' is unavailable"
-        )
+        return available, (None if available else "Python package 'acados_template' is unavailable")
     raise ValueError(f"Unknown solver: {name}")
 
 
-def make_solver(
-    name: str, tolerance: float, max_iterations: int, acados_dir: str | None
-):
+def make_solver(name: str, tolerance: float, max_iterations: int, acados_dir: str | None):
     factories = {
         "ipopt": Solver.IPOPT,
         "fatrop": Solver.FATROP,
@@ -254,9 +248,7 @@ def run_once(
                 max_violation = None
             else:
                 max_violation = (
-                    float(np.max(np.maximum(lower_violation, upper_violation)))
-                    if constraint_array.size
-                    else 0.0
+                    float(np.max(np.maximum(lower_violation, upper_violation))) if constraint_array.size else 0.0
                 )
 
         if solution.status != 0:
@@ -286,9 +278,7 @@ def run_once(
             constraint_evaluations=solver_stats.get("n_call_nlp_g"),
             augmented_lagrangian_evaluations=solver_stats.get("n_call_nlp_psi"),
         )
-    except (
-        Exception
-    ) as error:  # A benchmark must report one solver failure without aborting the matrix.
+    except Exception as error:  # A benchmark must report one solver failure without aborting the matrix.
         return RunResult(
             case=case,
             solver=solver_name,
@@ -325,14 +315,8 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                 "median_iterations": median_or_none(successful, "iterations"),
                 "cost": successful[-1].cost if successful else None,
                 "max_constraint_violation": (
-                    max(
-                        row.max_constraint_violation
-                        for row in successful
-                        if row.max_constraint_violation is not None
-                    )
-                    if any(
-                        row.max_constraint_violation is not None for row in successful
-                    )
+                    max(row.max_constraint_violation for row in successful if row.max_constraint_violation is not None)
+                    if any(row.max_constraint_violation is not None for row in successful)
                     else None
                 ),
             }
@@ -340,9 +324,7 @@ def summarize(rows: list[RunResult]) -> list[dict]:
     return summary
 
 
-def write_results(
-    output: Path, metadata: dict, rows: list[RunResult]
-) -> tuple[Path, Path]:
+def write_results(output: Path, metadata: dict, rows: list[RunResult]) -> tuple[Path, Path]:
     output.parent.mkdir(parents=True, exist_ok=True)
     json_path = output.with_suffix(".json")
     csv_path = output.with_suffix(".csv")
@@ -351,9 +333,7 @@ def write_results(
         "summary": summarize(rows),
         "runs": [asdict(row) for row in rows],
     }
-    json_path.write_text(
-        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-    )
+    json_path.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     with csv_path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=list(asdict(rows[0]).keys()))
         writer.writeheader()
@@ -363,12 +343,8 @@ def write_results(
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--cases", nargs="+", choices=CASE_NAMES, default=list(DEFAULT_CASE_NAMES)
-    )
-    parser.add_argument(
-        "--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES)
-    )
+    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(DEFAULT_CASE_NAMES))
+    parser.add_argument("--solvers", nargs="+", choices=SOLVER_NAMES, default=list(SOLVER_NAMES))
     parser.add_argument("--sizes", nargs="+", type=int, default=[20, 50, 100])
     parser.add_argument("--repetitions", type=int, default=3)
     parser.add_argument("--warmups", type=int, default=1)
@@ -382,9 +358,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.repetitions < 1 or args.warmups < 0 or any(size < 1 for size in args.sizes):
-        raise ValueError(
-            "repetitions and sizes must be positive; warmups must be non-negative"
-        )
+        raise ValueError("repetitions and sizes must be positive; warmups must be non-negative")
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     output = args.output or Path("benchmarks/results") / f"solver_benchmark_{timestamp}"

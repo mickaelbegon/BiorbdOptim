@@ -16,9 +16,7 @@ def test_missing_alpaqa_plugin_is_reported_at_solve_time():
         interface.solve()
 
 
-@pytest.mark.skipif(
-    not ALPAQA_AVAILABLE, reason="CasADi was not compiled with alpaqa support"
-)
+@pytest.mark.skipif(not ALPAQA_AVAILABLE, reason="CasADi was not compiled with alpaqa support")
 def test_minimal_alpaqa_nlp():
     xy = cas.MX.sym("xy", 2)
     nlp = {"x": xy, "f": (xy[0] - 1) ** 2 + (xy[1] - 2) ** 2, "g": xy[0] + xy[1]}

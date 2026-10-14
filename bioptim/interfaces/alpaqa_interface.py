@@ -30,20 +30,12 @@ def maximum_bound_violation(value, lower_bound, upper_bound) -> float:
     lower_bound = np.asarray(lower_bound, dtype=float).reshape(-1)
     upper_bound = np.asarray(upper_bound, dtype=float).reshape(-1)
     if not (value.size == lower_bound.size == upper_bound.size):
-        raise ValueError(
-            "Alpaqa constraint values and bounds must have identical dimensions."
-        )
+        raise ValueError("Alpaqa constraint values and bounds must have identical dimensions.")
     if value.size == 0:
         return 0.0
     if not np.all(np.isfinite(value)):
         return float("inf")
-    return float(
-        np.max(
-            np.maximum.reduce(
-                (lower_bound - value, value - upper_bound, np.zeros(value.size))
-            )
-        )
-    )
+    return float(np.max(np.maximum.reduce((lower_bound - value, value - upper_bound, np.zeros(value.size)))))
 
 
 class AlpaqaInterface(SolverInterface):
@@ -72,15 +64,11 @@ class AlpaqaInterface(SolverInterface):
         stats = self.shaked_ocp_solver.stats()
         solution["solver_stats"] = stats.copy()
         solution["native_status"] = stats.get("unified_return_status")
-        solution["inf_pr"] = maximum_bound_violation(
-            solution["g"], self.limits["lbg"], self.limits["ubg"]
-        )
+        solution["inf_pr"] = maximum_bound_violation(solution["g"], self.limits["lbg"], self.limits["ubg"])
         return out
 
     def online_optim(self, ocp, show_options=None):
-        raise NotImplementedError(
-            "Alpaqa does not currently support Bioptim online optimization callbacks."
-        )
+        raise NotImplementedError("Alpaqa does not currently support Bioptim online optimization callbacks.")
 
     def show_constraints_jacobian_sparsity(self):
         generic_show_constraints_jacobian_sparsity(self)
@@ -90,16 +78,10 @@ class AlpaqaInterface(SolverInterface):
             self.lam_g = sol.lam_g
 
     def dispatch_bounds(self, include_g=True, include_g_internal=True):
-        return generic_dispatch_bounds(
-            self, include_g=include_g, include_g_internal=include_g_internal
-        )
+        return generic_dispatch_bounds(self, include_g=include_g, include_g_internal=include_g_internal)
 
     def dispatch_obj_func(self):
         return generic_dispatch_obj_func(self)
 
-    def get_all_penalties(
-        self, nlp: NonLinearProgram, penalties, get_bounds: bool = False
-    ):
-        return generic_get_all_penalties(
-            self, nlp, penalties, scaled=True, get_bounds=get_bounds
-        )
+    def get_all_penalties(self, nlp: NonLinearProgram, penalties, get_bounds: bool = False):
+        return generic_get_all_penalties(self, nlp, penalties, scaled=True, get_bounds=get_bounds)

@@ -133,15 +133,18 @@ are not a controlled solver-only comparison.
 | 1 (shifted) | 3/3 | 0.069 | 0/3 | 0.503 | 2.02e-3 |
 | 2 (shifted) | 3/3 | 0.070 | 0/3 | 0.502 | 2.24e-3 |
 
+These measurements predate restricting the fixed-bound primal projection to
+alpaqa. IPOPT now retains its existing cyclic initial guesses, so its timing
+columns must be measured again before using them for a current comparison.
+
 The first alpaqa solve is feasible and close to the IPOPT cost (a difference
 of about `1.1e-5`). With the 0.5 s deadline, however, alpaqa does not make the
 shifted warm starts feasible while IPOPT solves all windows. The cyclic update
-now synchronizes fixed first-node states with their new bounds and passes each
-new alpaqa constraint multiplier vector to the next window. This approximately
-halves alpaqa's shifted-window violation and more than halves IPOPT's
-shifted-window time compared with retaining the stale primal/dual seed. Further
-alpaqa tuning or a less redundant NMPC formulation is still needed to meet the
-deadline at `1e-4`.
+now synchronizes alpaqa's fixed first-node states with their new bounds and
+passes each new alpaqa constraint multiplier vector to the next window. This
+approximately halves alpaqa's shifted-window violation compared with retaining
+the stale primal/dual seed. Further alpaqa tuning or a less redundant NMPC
+formulation is still needed to meet the deadline at `1e-4`.
 
 The holonomic-muscle case is the long stress benchmark. Its collocation
 formulation and implicit reconstruction of dependent coordinates are expensive,

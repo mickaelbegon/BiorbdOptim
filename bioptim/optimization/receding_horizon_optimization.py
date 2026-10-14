@@ -614,10 +614,11 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
                 self.nlp[0].x_init[key].check_and_adjust_dimensions(len(self.nlp[0].states[key]), self.nlp[0].ns)
 
             self.nlp[0].x_init[key].init[:, :] = states[key]
-            first_node_min = self.nlp[0].x_bounds[key].min[:, 0]
-            first_node_max = self.nlp[0].x_bounds[key].max[:, 0]
-            fixed_at_first_node = first_node_min == first_node_max
-            self.nlp[0].x_init[key].init[fixed_at_first_node, 0] = first_node_min[fixed_at_first_node]
+            if self.ocp_solver.opts.type == SolverType.ALPAQA:
+                first_node_min = self.nlp[0].x_bounds[key].min[:, 0]
+                first_node_max = self.nlp[0].x_bounds[key].max[:, 0]
+                fixed_at_first_node = first_node_min == first_node_max
+                self.nlp[0].x_init[key].init[fixed_at_first_node, 0] = first_node_min[fixed_at_first_node]
         return True
 
     def advance_window_initial_guess_controls(self, sol: Solution, **advance_options) -> Bool:

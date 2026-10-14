@@ -70,9 +70,7 @@ def test_alpaqa_rejects_unverified_features():
 
 
 def test_maximum_bound_violation():
-    assert maximum_bound_violation([1.1, 2.0], [0.0, 2.0], [1.0, 2.0]) == pytest.approx(
-        0.1
-    )
+    assert maximum_bound_violation([1.1, 2.0], [0.0, 2.0], [1.0, 2.0]) == pytest.approx(0.1)
     assert maximum_bound_violation([1.0], [1.0], [1.0]) == 0.0
     assert maximum_bound_violation([np.nan], [0.0], [2.0]) == float("inf")
     with pytest.raises(ValueError, match="identical dimensions"):

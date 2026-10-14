@@ -63,9 +63,7 @@ class ALPAQA(GenericSolver):
     online_optim: OnlineOptim | None = None
     show_options: AnyDictOptional = None
     _c_compile: bool = False
-    _alpaqa_options: dict[str, dict[str, Any]] = field(
-        default_factory=lambda: {"alm": {}, "panoc": {}, "lbfgs": {}}
-    )
+    _alpaqa_options: dict[str, dict[str, Any]] = field(default_factory=lambda: {"alm": {}, "panoc": {}, "lbfgs": {}})
 
     @property
     def c_compile(self) -> bool:
@@ -83,9 +81,7 @@ class ALPAQA(GenericSolver):
         try:
             group, option = name.split(".", 1)
         except ValueError as exc:
-            raise ValueError(
-                "Alpaqa options must use the '<alm|panoc|lbfgs>.<name>' form."
-            ) from exc
+            raise ValueError("Alpaqa options must use the '<alm|panoc|lbfgs>.<name>' form.") from exc
         self._set_option(group, option, val)
 
     def set_alm_option(self, name: Str, value: Any) -> None:
@@ -160,15 +156,9 @@ class ALPAQA(GenericSolver):
 
     def set_c_compile(self, val: bool) -> None:
         if val:
-            raise NotImplementedError(
-                "C compilation is not supported by the current CasADi alpaqa plugin."
-            )
+            raise NotImplementedError("C compilation is not supported by the current CasADi alpaqa plugin.")
         self._c_compile = False
 
     def as_dict(self, solver) -> dict:
-        nested = {
-            group: values.copy()
-            for group, values in self._alpaqa_options.items()
-            if values
-        }
+        nested = {group: values.copy() for group, values in self._alpaqa_options.items() if values}
         return {"alpaqa": nested, **solver.options_common}
