@@ -1,0 +1,350 @@
+"""
+Test for file IO.
+"""
+
+from typing import Callable
+from casadi import vertcat, SX, MX
+import numpy as np
+import numpy.testing as npt
+import pytest
+from bioptim import (
+    BoundsList,
+    ConfigureProblem,
+    ConstraintFcn,
+    ConstraintList,
+    DynamicsEvaluation,
+    DynamicsOptionsList,
+    DynamicsOptions,
+    ObjectiveFcn,
+    ObjectiveList,
+    OdeSolver,
+    OdeSolverBase,
+    OptimalControlProgram,
+    Node,
+    NonLinearProgram,
+    Solver,
+    PhaseDynamics,
+    SolutionMerge,
+    ConfigureVariables,
+    StateDynamics,
+)
+from bioptim.gui.graph import OcpToGraph
+
+
+class NonControlledMethod(StateDynamics):
+    """
+    This is a custom model that inherits from bioptim.CustomModel
+    As CustomModel is an abstract class, some methods must be implemented.
+    """
+
+    def __init__(self, name: str = None, **kwargs):
+        super().__init__(**kwargs)
+        self.a = 0
+        self.b = 0
+        self.c = 0
+        self._name = name
+
+    @property
+    def name(self):
+        return self._name
+
+    @property
+    def name_dofs(self) -> list[str]:
+        return ["a", "b", "c"]
+
+    @property
+    def nb_state(self):
+        return 3
+
+    @property
+    def state_configuration_functions(self) -> list[Callable]:
+        return []
+
+    @property
+    def control_configuration_functions(self) -> list[Callable]:
+        return []
+
+    @property
+    def algebraic_configuration_functions(self) -> list[Callable]:
+        return []
+
+    @property
+    def extra_configuration_functions(self) -> list[Callable]:
+        return [lambda ocp, nlp: self.declare_variables(ocp, nlp)]
+
+    def system_dynamics(
+        self,
+        a: MX | SX,
+        b: MX | SX,
+        c: MX | SX,
+        t: MX | SX,
+        t_phase: MX | SX,
+    ) -> MX | SX:
+        """
+        The system dynamics is the function that describes the model.
+
+        Returns
+        -------
+        The value of the derivative of each state dx/dt at the current time t
+        """
+        a_dot = 100 + b
+        b_dot = a / (((t - t_phase) + 1) * 100)
+        c_dot = a * b + c
+
+        return vertcat(a_dot, b_dot, c_dot)
+
+    def dynamics(
+        self,
+        time: MX | SX,
+        states: MX | SX,
+        controls: MX | SX,
+        parameters: MX | SX,
+        algebraic_states: MX | SX,
+        numerical_timeseries: MX | SX,
+        nlp: NonLinearProgram,
+    ) -> DynamicsEvaluation:
+        t_phase = nlp.tf
+
+        return DynamicsEvaluation(
+            dxdt=self.system_dynamics(a=states[0], b=states[1], c=states[2], t=time, t_phase=t_phase),
+            defects=None,
+        )
+
+    def declare_variables(self, ocp: OptimalControlProgram, nlp: NonLinearProgram):
+        name = "a"
+        name_a = [name]
+        ConfigureVariables.configure_new_variable(
+            name,
+            name_a,
+            ocp,
+            nlp,
+            as_states=True,
+            as_controls=False,
+        )
+
+        name = "b"
+        name_b = [name]
+        ConfigureVariables.configure_new_variable(
+            name,
+            name_b,
+            ocp,
+            nlp,
+            as_states=True,
+            as_controls=False,
+        )
+
+        name = "c"
+        name_c = [name]
+        ConfigureVariables.configure_new_variable(
+            name,
+            name_c,
+            ocp,
+            nlp,
+            as_states=True,
+            as_controls=False,
+        )
+
+
+def prepare_ocp(
+    n_phase: int,
+    time_min: list,
+    time_max: list,
+    use_sx: bool,
+    ode_solver: OdeSolverBase = OdeSolver.RK4(n_integration_steps=5),
+    phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
+) -> OptimalControlProgram:
+    """
+    Prepare the ocp
+
+    Parameters
+    ----------
+    n_phase: int
+        Number of phase
+    time_min: list
+        The minimal time for each phase
+    time_max: list
+        The maximal time for each phase
+    ode_solver: OdeSolverBase
+        The ode solver to use
+    use_sx: bool
+        Callable Mx or Sx used for ocp
+    phase_dynamics: PhaseDynamics
+        If the dynamics equation within a phase is unique or changes at each node.
+        PhaseDynamics.SHARED_DURING_THE_PHASE is much faster, but lacks the capability to have changing dynamics within
+        a phase. PhaseDynamics.ONE_PER_NODE should also be used when multi-node penalties with more than 3 nodes or with COLLOCATION (cx_intermediate_list) are added to the OCP.
+
+    Returns
+    -------
+    The OptimalControlProgram ready to be solved
+    """
+    models = tuple(NonControlledMethod() for _ in range(n_phase))
+    n_shooting = [5 for i in range(n_phase)]  # Gives m node shooting for my n phases problem
+    final_time = [0.01 for i in range(n_phase)]  # Set the final time for all my n phases
+
+    # Creates the system's dynamic for my n phases
+    dynamics = DynamicsOptionsList()
+    for i in range(n_phase):
+        dynamics.add(
+            DynamicsOptions(
+                phase=i,
+                expand_dynamics=True,
+                ode_solver=ode_solver,
+                phase_dynamics=phase_dynamics,
+            )
+        )
+
+    # Creates the constraint for my n phases
+    constraints = ConstraintList()
+    for i in range(n_phase):
+        constraints.add(
+            ConstraintFcn.TIME_CONSTRAINT, node=Node.END, min_bound=time_min[i], max_bound=time_max[i], phase=i
+        )
+
+    objective_functions = ObjectiveList()
+    objective_functions.add(
+        ObjectiveFcn.Mayer.MINIMIZE_STATE,
+        target=5,
+        key="c",
+        node=Node.END,
+        quadratic=True,
+        weight=1,
+        phase=n_phase - 1,
+    )
+    objective_functions.add(
+        ObjectiveFcn.Mayer.MINIMIZE_STATE,
+        target=100,
+        key="a",
+        node=Node.END,
+        quadratic=True,
+        weight=0.001,
+        phase=n_phase - 1,
+    )
+
+    # Sets the bound for all the phases
+    x_bounds = BoundsList()
+    for i in range(n_phase):
+        x_bounds.add("a", min_bound=[[0, 0, 0]], max_bound=[[0 if i == 0 else 1000, 1000, 1000]], phase=i)
+        x_bounds.add("b", min_bound=[[0, 0, 0]], max_bound=[[0 if i == 0 else 1000, 1000, 1000]], phase=i)
+        x_bounds.add("c", min_bound=[[0, 0, 0]], max_bound=[[0 if i == 0 else 1000, 1000, 1000]], phase=i)
+
+    return OptimalControlProgram(
+        models,
+        n_shooting,
+        final_time,
+        dynamics=dynamics,
+        x_bounds=x_bounds,
+        objective_functions=objective_functions,
+        constraints=constraints,
+        use_sx=use_sx,
+    )
+
+
+def test_print_control_type_none(capsys):
+    ocp = prepare_ocp(
+        n_phase=1,
+        time_min=[0.01],
+        time_max=[0.1],
+        use_sx=False,
+    )
+
+    ocp.print(to_console=True, to_graph=False)
+    graph = OcpToGraph(ocp)._prepare_print()
+
+    assert "CONTROLS" in capsys.readouterr().out
+    assert "cluster_0" in graph.source
+
+
+@pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.ONE_PER_NODE])
+@pytest.mark.parametrize("use_sx", [False, True])
+def test_main_control_type_none(use_sx, phase_dynamics):
+    """
+    Prepare and solve and animate a reaching task ocp
+    """
+    # The logic of the test and how time is used should be redesigned, skipping the test for now
+    return
+
+    # number of stimulation corresponding to phases
+    n = 10
+    # minimum time between two phase
+    time_min = [0.01 for _ in range(n)]
+    # maximum time between two phase
+    time_max = [0.1 for _ in range(n)]
+    ocp = prepare_ocp(
+        n_phase=n,
+        time_min=time_min,
+        time_max=time_max,
+        use_sx=use_sx,
+        phase_dynamics=phase_dynamics,
+    )
+
+    # --- Solve the program --- #
+    sol = ocp.solve(Solver.IPOPT())
+
+    # Check objective function value
+    TestUtils.assert_objective_value(sol=sol, expected_value=0.2919065990591678)
+
+    # Check finishing time
+    times = [float(t[-1, 0]) for t in sol.decision_time(to_merge=SolutionMerge.NODES)]
+    npt.assert_almost_equal(sum(times), 0.8299336018055604)
+
+    # Check constraints
+    g = np.array(sol.constraints)
+    for i in range(n):
+        npt.assert_almost_equal(g[i * 19 + 0 : i * 19 + 15], np.zeros((15, 1)))
+    npt.assert_almost_equal(
+        g[18:-1:19, 0],
+        [0.09848005, 0.0974753, 0.09652673, 0.09540809, 0.0939693, 0.09197322, 0.08894771, 0.08377719, 0.07337567],
+    )
+    npt.assert_equal(g.shape, (187, 1))
+
+    # Check some results
+    # first phase
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[0]["a"],
+        np.array([0.0, 1.96960231, 3.93921216, 5.90883684, 7.87848335, 9.84815843]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[0]["b"],
+        np.array([0.0, 0.00019337, 0.00076352, 0.00169617, 0.00297785, 0.0045958]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[0]["c"],
+        np.array([0.00000000e00, 1.88768128e-06, 3.00098595e-05, 1.50979104e-04, 4.74274962e-04, 1.15105831e-03]),
+        decimal=8,
+    )
+
+    # intermediate phase
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[5]["a"],
+        np.array([48.20121535, 50.04237763, 51.88365353, 53.72504579, 55.56655709, 57.40819004]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[5]["b"],
+        np.array([0.08926236, 0.0953631, 0.10161488, 0.10801404, 0.11455708, 0.1212406]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[5]["c"],
+        np.array([0.60374532, 0.69912979, 0.80528341, 0.92297482, 1.05299864, 1.19617563]),
+        decimal=8,
+    )
+
+    # last phase
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[9]["a"],
+        np.array([82.06013653, 82.2605896, 82.4610445, 82.6615012, 82.86195973, 83.06242009]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[9]["b"],
+        np.array([0.22271563, 0.22362304, 0.22453167, 0.2254415, 0.22635253, 0.22726477]),
+        decimal=8,
+    )
+    npt.assert_almost_equal(
+        sol.decision_states(to_merge=SolutionMerge.NODES)[9]["c"],
+        np.array([4.83559727, 4.88198772, 4.92871034, 4.97576671, 5.02315844, 5.07088713]),
+        decimal=8,
+    )

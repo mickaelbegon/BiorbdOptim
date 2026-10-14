@@ -1,0 +1,368 @@
+"""
+Test for file IO
+"""
+
+import platform
+from types import SimpleNamespace
+
+from bioptim import (
+    Solver,
+    MultiCyclicCycleSolutions,
+    PhaseDynamics,
+    SolutionMerge,
+    OdeSolver,
+    InitialGuessList,
+    InterpolationType,
+)
+import bioptim.optimization.receding_horizon_optimization as rho_module
+from bioptim.optimization.receding_horizon_optimization import MultiCyclicRecedingHorizonOptimization
+import numpy as np
+import numpy.testing as npt
+import pytest
+
+from ..utils import TestUtils
+
+
+@pytest.mark.parametrize("already_converted", [False, True])
+@pytest.mark.parametrize(
+    "ode_solver",
+    [OdeSolver.RK4(), OdeSolver.COLLOCATION(polynomial_degree=3, method="radau")],
+)
+def test_multi_cyclic_state_guess_first_and_following_windows(ode_solver, already_converted, monkeypatch):
+    is_collocation = isinstance(ode_solver, OdeSolver.COLLOCATION)
+    intermediate_frames = ode_solver.polynomial_degree + 1 if is_collocation else 1
+    interpolation = InterpolationType.ALL_POINTS if is_collocation else InterpolationType.EACH_FRAME
+    n_frames = 6 * intermediate_frames + 1
+    x_init = InitialGuessList()
+    dimensions = {"q": 2, "qdot": 1}
+    for key, size in dimensions.items():
+        x_init.add(
+            key,
+            np.zeros((size, n_frames if already_converted else 1)),
+            interpolation=interpolation if already_converted else InterpolationType.CONSTANT,
+            phase=0,
+        )
+
+    nmpc = MultiCyclicRecedingHorizonOptimization.__new__(MultiCyclicRecedingHorizonOptimization)
+    nmpc.nlp = [
+        SimpleNamespace(
+            x_init=x_init,
+            dynamics_type=SimpleNamespace(ode_solver=ode_solver),
+            ns=6,
+            states={key: SimpleNamespace(shape=size) for key, size in dimensions.items()},
+        )
+    ]
+    nmpc.cycle_len = 3
+    nmpc.n_cycles = 2
+    nmpc.n_cycles_to_advance = 1
+    nmpc.nb_intermediate_frames = intermediate_frames
+    nmpc.initial_guess_frames = [3, 4, 5, 3, 4, 5, 6]
+
+    # An unwritten allocation must fail independently of the allocator's previous contents.
+    monkeypatch.setattr(rho_module, "np", SimpleNamespace(ndarray=lambda shape: np.full(shape, np.nan)))
+    expected_frames = np.concatenate(
+        (np.tile(np.arange(3 * intermediate_frames, 6 * intermediate_frames), 2), [6 * intermediate_frames])
+    )
+    for window in range(2):
+        states = {
+            key: np.arange(size * n_frames).reshape(size, n_frames) + 1000 * (window + 1)
+            for key, size in dimensions.items()
+        }
+
+        def decision_states(to_merge):
+            assert to_merge == SolutionMerge.NODES
+            return states
+
+        nmpc.advance_window_initial_guess_states(SimpleNamespace(decision_states=decision_states))
+        for key in dimensions:
+            assert x_init[key].type == interpolation
+            npt.assert_array_equal(x_init[key].init, states[key][:, expected_frames])
+
+
+@pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])
+@pytest.mark.parametrize(
+    "ode_solver",
+    [
+        OdeSolver.RK4(),
+        OdeSolver.COLLOCATION(polynomial_degree=3, method="radau"),
+        OdeSolver.COLLOCATION(
+            polynomial_degree=3, method="legendre"
+        ),  # Not all outputs are tested as the legendre method is sensitive on all platform
+        # OdeSolver.IRK(polynomial_degree=3), # TODO
+    ],
+)
+def test_multi_cyclic_nmpc_get_final(phase_dynamics, ode_solver):
+    if platform.system() == "Windows" or platform.system() == "Darwin":
+        pytest.skip("This test is skipped on Windows and macOS because sensitive")
+
+    def update_functions(_nmpc, cycle_idx, _sol):
+        return cycle_idx < n_cycles_total  # True if there are still some cycle to perform
+
+    from bioptim.examples.toy_examples.moving_horizon_estimation import multi_cyclic_nmpc as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+
+    n_cycles_simultaneous = 2
+    n_cycles_to_advance = 1
+    n_cycles_total = 3
+    cycle_len = 20
+    nmpc = ocp_module.prepare_nmpc(
+        model_path=bioptim_folder + "/examples/models/arm2.bioMod",
+        cycle_len=cycle_len,
+        cycle_duration=1,
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        n_cycles_to_advance=n_cycles_to_advance,
+        max_torque=50,
+        phase_dynamics=phase_dynamics,
+        expand_dynamics=True,
+        ode_solver=ode_solver,
+    )
+    sol = nmpc.solve(
+        update_functions,
+        solver=Solver.IPOPT(),
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        get_all_iterations=True,
+        cycle_solutions=MultiCyclicCycleSolutions.ALL_CYCLES,
+    )
+
+    # Check some of the results
+    states = sol[0].decision_states(to_merge=SolutionMerge.NODES)
+    controls = sol[0].decision_controls(to_merge=SolutionMerge.NODES)
+    q, qdot, tau = states["q"], states["qdot"], controls["tau"]
+
+    if isinstance(ode_solver, OdeSolver.RK4):
+        # initial and final position
+        npt.assert_equal(q.shape, (3, n_cycles_total * cycle_len + 1))
+        npt.assert_almost_equal(q[:, 0], np.array((-12.56637061, 1.04359174, 1.03625065)))
+        npt.assert_almost_equal(q[:, -1], np.array([1.37753244e-40, 1.04359174e00, 1.03625065e00]))
+
+        # initial and final velocities
+        npt.assert_almost_equal(qdot[:, 0], np.array([6.28318531, 2.57685385, -0.06542029]))
+        npt.assert_almost_equal(qdot[:, -1], np.array([6.28318531, 2.40501008, -0.63136038]), decimal=5)
+
+        # initial and final controls
+        npt.assert_almost_equal(tau[:, 0], np.array([1.34399907e-11, 4.92501368e00, 2.53191286e00]))
+        npt.assert_almost_equal(tau[:, -1], np.array([2.82405932e-12, 4.96328211e00, 2.20504597e00]), decimal=4)
+
+        # check time
+        n_steps = nmpc.nlp[0].dynamics_type.ode_solver.n_integration_steps
+        time = sol[0].stepwise_time(to_merge=SolutionMerge.NODES)
+        assert time.shape == (n_cycles_total * cycle_len * (n_steps + 1) + 1, 1)
+        assert time[0] == 0
+        npt.assert_almost_equal(time[-1], 3.0)
+
+        # check some results of the second structure
+        for s in sol[1]:
+            states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+            q = states["q"]
+
+            # initial and final position
+            npt.assert_equal(q.shape, (3, 241))
+
+            # check time
+            time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+            assert time.shape == (241, 1)
+            assert time[0] == 0
+            npt.assert_almost_equal(time[-1], 2.0, decimal=4)
+
+        # check some result of the third structure
+        assert len(sol[2]) == 4
+
+        for s in sol[2]:
+            states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+            q = states["q"]
+
+            # initial and final position
+            npt.assert_equal(q.shape, (3, 121))
+
+            # check time
+            time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+            assert time.shape == (121, 1)
+            assert time[0] == 0
+            npt.assert_almost_equal(time[-1], 1.0, decimal=4)
+
+    elif isinstance(ode_solver, OdeSolver.COLLOCATION):
+        if ode_solver.method == "radau":
+            # initial and final position
+            npt.assert_equal(q.shape, (3, n_cycles_total * cycle_len * (ode_solver.polynomial_degree + 1) + 1))
+            npt.assert_almost_equal(q[:, 0], np.array((-12.56637061, 1.04359174, 1.03625065)))
+            npt.assert_almost_equal(q[:, -1], np.array([0.0, 1.04359174, 1.03625065]))
+            # initial and final velocities
+            npt.assert_almost_equal(qdot[:, 0], np.array([6.28318531, 2.5769604, -0.06617214]), decimal=5)
+            npt.assert_almost_equal(qdot[:, -1], np.array([6.28318531, 2.40569762, -0.63227535]), decimal=5)
+            # initial and final controls
+            npt.assert_almost_equal(tau[:, 0], np.array([-1.57225142e-10, 4.92697679e00, 2.53359257e00]), decimal=4)
+            npt.assert_almost_equal(tau[:, -1], np.array([1.75585447e-10, 4.96765087e00, 2.20617819e00]), decimal=4)
+
+        # check time
+        n_steps = nmpc.nlp[0].dynamics_type.ode_solver.polynomial_degree
+        time = sol[0].stepwise_time(to_merge=SolutionMerge.NODES)
+        assert time.shape == (n_cycles_total * cycle_len * (n_steps + 1) + 1, 1)
+        assert time[0] == 0
+        npt.assert_almost_equal(time[-1], 3.0)
+
+        # check some results of the second structure
+        for s in sol[1]:
+            states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+            q = states["q"]
+
+            # initial and final position
+            npt.assert_equal(q.shape, (3, 161))
+
+            # check time
+            time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+            assert time.shape == (161, 1)
+            assert time[0] == 0
+            npt.assert_almost_equal(time[-1], 2.0, decimal=4)
+
+        # check some result of the third structure
+        assert len(sol[2]) == 4
+
+        for s in sol[2]:
+            states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+            q = states["q"]
+
+            # initial and final position
+            npt.assert_equal(q.shape, (3, 81))
+
+            # check time
+            time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+            assert time.shape == (81, 1)
+            assert time[0] == 0
+            npt.assert_almost_equal(time[-1], 1.0, decimal=4)
+
+
+@pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])
+def test_multi_cyclic_nmpc_not_get_final(phase_dynamics):
+    if platform.system() != "Linux":
+        # This is a long test and CI is already long for Windows and Mac
+        return
+
+    def update_functions(_nmpc, cycle_idx, _sol):
+        return cycle_idx < n_cycles_total  # True if there are still some cycle to perform
+
+    from bioptim.examples.toy_examples.moving_horizon_estimation import multi_cyclic_nmpc as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+
+    n_cycles_simultaneous = 2
+    n_cycles_to_advance = 1
+    n_cycles_total = 3
+    cycle_len = 20
+    nmpc = ocp_module.prepare_nmpc(
+        model_path=bioptim_folder + "/examples/models/arm2.bioMod",
+        cycle_len=cycle_len,
+        cycle_duration=1,
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        n_cycles_to_advance=n_cycles_to_advance,
+        max_torque=50,
+        phase_dynamics=phase_dynamics,
+    )
+    sol = nmpc.solve(
+        update_functions,
+        solver=Solver.IPOPT(_max_iter=0),
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        get_all_iterations=True,
+        cycle_solutions=MultiCyclicCycleSolutions.FIRST_CYCLES,
+    )
+
+    # check some result of the third structure
+    assert len(sol[2]) == 3
+
+    npt.assert_almost_equal(sol[2][0].cost.toarray().squeeze(), 0.0)
+    npt.assert_almost_equal(sol[2][1].cost.toarray().squeeze(), 0.0)
+    npt.assert_almost_equal(sol[2][2].cost.toarray().squeeze(), 0.0)
+
+
+@pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE])
+def test_multi_cyclic_nmpc_with_parameters(phase_dynamics):
+    """
+    Please note that this test is over constrained 'Too few degrees of freedom (n_x = 362, n_c = 363)', but works
+    """
+
+    def update_functions(_nmpc, cycle_idx, _sol):
+        return cycle_idx < n_cycles_total  # True if there are still some cycle to perform
+
+    from bioptim.examples.toy_examples.moving_horizon_estimation import multi_cyclic_nmpc_with_parameters as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+
+    n_cycles_simultaneous = 2
+    n_cycles_to_advance = 1
+    n_cycles_total = 3
+    cycle_len = 20
+    nmpc = ocp_module.prepare_nmpc(
+        model_path=bioptim_folder + "/examples/models/arm2.bioMod",
+        cycle_len=cycle_len,
+        cycle_duration=1,
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        n_cycles_to_advance=n_cycles_to_advance,
+        max_torque=50,
+        phase_dynamics=phase_dynamics,
+    )
+    sol = nmpc.solve(
+        update_functions,
+        solver=Solver.IPOPT(),
+        n_cycles_simultaneous=n_cycles_simultaneous,
+        get_all_iterations=True,
+        cycle_solutions=MultiCyclicCycleSolutions.FIRST_CYCLES,
+    )
+
+    # Check some of the results
+    states = sol[0].decision_states(to_merge=SolutionMerge.NODES)
+    controls = sol[0].decision_controls(to_merge=SolutionMerge.NODES)
+    q, qdot, tau = states["q"], states["qdot"], controls["tau"]
+    parameters = sol[0].cycle_parameters
+
+    # initial and final position
+    npt.assert_equal(q.shape, (3, n_cycles_total * cycle_len + 1))
+    npt.assert_almost_equal(q[:, 0], np.array((-12.56637061, 1.04359174, 1.03625065)))
+    npt.assert_almost_equal(q[:, -1], np.array([1.37753244e-40, 1.04359174e00, 1.03625065e00]))
+
+    # initial and final velocities
+    npt.assert_almost_equal(qdot[:, 0], np.array([6.28219821, 2.53701443, 0.06373775]))
+    npt.assert_almost_equal(qdot[:, -1], np.array([6.28219821, 2.42094266, -0.54434117]), decimal=5)
+
+    # initial and final controls
+    npt.assert_almost_equal(tau[:, 0], np.array([0.01974196, 2.45117837, 1.1706578]))
+    npt.assert_almost_equal(tau[:, -1], np.array([-0.01974196, 2.72262965, 1.25573282]), decimal=4)
+
+    # initial and final parameters
+    for key in parameters.keys():
+        npt.assert_almost_equal(
+            parameters[key], [np.array([2.00000007]), np.array([2.00000009]), np.array([2.00000009])]
+        )
+
+    # check time
+    n_steps = nmpc.nlp[0].dynamics_type.ode_solver.n_integration_steps
+    time = sol[0].stepwise_time(to_merge=SolutionMerge.NODES)
+    assert time.shape == (n_cycles_total * cycle_len * (n_steps + 1) + 1, 1)
+    assert time[0] == 0
+    npt.assert_almost_equal(time[-1], 3.0)
+
+    # check some results of the second structure
+    for s in sol[1]:
+        states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+        q = states["q"]
+
+        # initial and final position
+        npt.assert_equal(q.shape, (3, 241))
+
+        # check time
+        time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+        assert time.shape == (241, 1)
+        assert time[0] == 0
+        npt.assert_almost_equal(time[-1], 2.0, decimal=4)
+
+    for s in sol[2]:
+        states = s.stepwise_states(to_merge=SolutionMerge.NODES)
+        q = states["q"]
+
+        # initial and final position
+        npt.assert_equal(q.shape, (3, 121))
+
+        # check time
+        time = s.stepwise_time(to_merge=SolutionMerge.NODES)
+        assert time.shape == (121, 1)
+        assert time[0] == 0
+        npt.assert_almost_equal(time[-1], 1.0, decimal=4)

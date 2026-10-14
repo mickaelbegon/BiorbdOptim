@@ -695,10 +695,15 @@ class PlotOcp:
         self, i: Int, nlp: NonLinearProgram, variable: Str, ctr: Int, ax: plt.Axes, mapping_to_first_index: IntList
     ) -> None:
         """Add bounds to a specific plot"""
-        if nlp.plot[variable].bounds.type == InterpolationType.EACH_FRAME:
+        if nlp.plot[variable].bounds.type in [InterpolationType.EACH_FRAME, InterpolationType.ALL_POINTS]:
             ns = nlp.plot[variable].bounds.min.shape[1] - 1
         else:
             ns = nlp.ns
+        t = (
+            [np.linspace(0, ns, ns + 1) for i in range(len(self.t))]
+            if nlp.plot[variable].bounds.type == InterpolationType.ALL_POINTS
+            else self.t
+        )
 
         # TODO: introduce repeat for the COLLOCATIONS min/max_bounds only for states graphs.
         # For now the plots in COLLOCATIONS with LINEAR are not giving the right values
@@ -712,8 +717,8 @@ class PlotOcp:
             bounds_min = np.concatenate((bounds_min, [bounds_min[-1]]))
             bounds_max = np.concatenate((bounds_max, [bounds_max[-1]]))
 
-        self.plots_bounds.append([ax.step(self.t[i], bounds_min, where="post", **self.plot_options["bounds"]), i])
-        self.plots_bounds.append([ax.step(self.t[i], bounds_max, where="post", **self.plot_options["bounds"]), i])
+        self.plots_bounds.append([ax.step(t[i], bounds_min, where="post", **self.plot_options["bounds"]), i])
+        self.plots_bounds.append([ax.step(t[i], bounds_max, where="post", **self.plot_options["bounds"]), i])
 
     def _add_new_axis(self, variable: Str, nb: Int, n_rows: Int, n_cols: Int) -> np.ndarray[plt.Axes]:
         """
@@ -1185,8 +1190,13 @@ class PlotOcp:
                         y_min = np.inf
                         for p in ax.get_children():
                             if isinstance(p, lines.Line2D):
-                                y_min = min(y_min, np.nanmin(p.get_ydata()))
-                                y_max = max(y_max, np.nanmax(p.get_ydata()))
+                                y_data = np.asarray(p.get_ydata())
+                                if y_data.size == 0 or np.isnan(y_data).all():
+                                    continue
+                                y_min = min(y_min, np.nanmin(y_data))
+                                y_max = max(y_max, np.nanmax(y_data))
+                        if not np.isfinite(y_min) or not np.isfinite(y_max):
+                            continue
                         ax.set_ylim(self._compute_ylim(y_min, y_max, 1.25))
 
         for p in self.plots_vertical_lines:
