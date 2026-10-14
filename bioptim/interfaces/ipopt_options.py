@@ -11,6 +11,7 @@ from ..misc.parameters_types import (
     Int,
     Float,
     Str,
+    StrOptional,
     AnyDictOptional,
 )
 
@@ -100,6 +101,8 @@ class IPOPT(GenericSolver):
     _nlp_scaling_method: Str = "gradient-based"  # "none"
     _limited_memory_max_history: Int = 50
     _linear_solver: Str = "mumps"  # "ma57", "ma86", "mumps"
+    _hsllib: StrOptional = None
+    _pardisolib: StrOptional = None
     _mu_init: Float = 0.1
     _warm_start_init_point: Str = "no"
     _warm_start_mult_bound_push: Float = 0.001
@@ -164,6 +167,14 @@ class IPOPT(GenericSolver):
     @property
     def linear_solver(self) -> Str:
         return self._linear_solver
+
+    @property
+    def hsl_library(self) -> StrOptional:
+        return self._hsllib
+
+    @property
+    def pardiso_library(self) -> StrOptional:
+        return self._pardisolib
 
     @property
     def mu_init(self) -> Float:
@@ -251,6 +262,14 @@ class IPOPT(GenericSolver):
 
     def set_linear_solver(self, val: Str) -> None:
         self._linear_solver = val
+
+    def set_hsl_library(self, val: Str) -> None:
+        """Set the HSL shared library loaded by IPOPT at runtime."""
+        self._hsllib = val
+
+    def set_pardiso_library(self, val: Str) -> None:
+        """Set the Panua PARDISO shared library loaded by IPOPT at runtime."""
+        self._pardisolib = val
 
     def set_mu_init(self, val: Float) -> None:
         self._mu_init = val
@@ -342,7 +361,7 @@ class IPOPT(GenericSolver):
         options = {}
         non_python_options = ["_c_compile", "type", "show_online_optim", "online_optim", "show_options"]
         for key in solver_options:
-            if key not in non_python_options:
+            if key not in non_python_options and solver_options[key] is not None:
                 ipopt_key = "ipopt." + key[1:]
                 options[ipopt_key] = solver_options[key]
         return {**options, **solver.options_common}

@@ -1,0 +1,87 @@
+# MadNLP solver
+
+Bioptim can use the optional `madnlp` plugin of CasADi's `nlpsol` API. Check the
+installed build with:
+
+```python
+import casadi as cas
+print(cas.has_nlpsol("madnlp"))
+```
+
+The standard CasADi 3.7.2 Python wheels do not include this plugin. MadNLP is
+implemented in Julia, but users do not install a separate Julia environment at
+runtime: CasADi must instead be built with its MadNLP/Julia C interface enabled.
+Follow the CasADi build instructions and verify the command above before use.
+Bioptim remains importable when the plugin is absent and raises an installation
+error only when `Solver.MADNLP()` is constructed.
+
+```python
+from bioptim import Solver
+
+solver = Solver.MADNLP()
+solver.set_convergence_tolerance(1e-6)
+solver.set_constraint_tolerance(1e-6)
+solver.set_maximum_iterations(500)
+solver.set_print_level("INFO")
+solver.set_linear_solver("umfpack")
+solution = ocp.solve(solver)
+```
+
+CasADi accepts MadNLP-specific values in a nested `madnlp` dictionary. Bioptim
+maps convergence and constraint tolerance to MadNLP's single `tol` option,
+maximum iterations to `max_iter`, and output verbosity to `print_level`. The
+public log-level names are converted to the C interface values `TRACE=1`,
+`DEBUG=2`, `INFO=3`, `NOTICE=4`, `WARN=5`, and `ERROR=6` for CasADi 3.8's
+`libMad` interface. CasADi 3.7's older `madnlp_c` interface uses the reverse
+scale (`ERROR=0` through `TRACE=5`); Bioptim converts it automatically.
+`set_option_unsafe(value, name)` adds another value to that nested dictionary;
+the CasADi plugin validates its name and type when it constructs the solver.
+
+## Linear solvers
+
+The base CPU `libMad` runtime used by CasADi exposes three backends:
+
+- `mumps` (default): sparse symmetric-indefinite factorization with inertia;
+- `umfpack`: sparse LU factorization, used by MadNLP in inertia-free mode;
+- `lapack_cpu`: dense Bunch-Kaufman factorization, intended only for small
+  dense KKT systems.
+
+An x86-64 runtime compiled with `MadNLPPardiso` can additionally expose
+`pardiso_mkl`, which Bioptim maps to `PardisoMKLSolver`. This backend uses
+Intel oneMKL, remains sparse, and reports the KKT inertia to MadNLP. It is not
+available on native ARM platforms.
+
+Select one with `solver.set_linear_solver(...)`. For CasADi 3.8 and newer,
+Bioptim translates these lowercase aliases to the Julia type names required by `libMad`
+(`MumpsSolver`, `UmfpackSolver`, `LapackCPUSolver`, and
+`PardisoMKLSolver`). CasADi 3.7's older `madnlp_c` interface requires the
+lowercase names; Bioptim converts them automatically. PARDISO requires
+CasADi 3.8 or newer with a PARDISO-enabled `libMad`. Passing the wrong form
+directly through `set_option_unsafe` can cause a warning and silent fallback
+to MUMPS.
+
+The selected `libMad` must contain `MadNLPPardiso`; otherwise older runtimes
+warn and silently retain MUMPS. Verify the MadNLP banner in deployment tests.
+
+MadNLP also supports the Panua `PardisoSolver`, HSL, and GPU linear solvers in
+its Julia packages. They require a separately compiled runtime before Bioptim
+can select them. HSL backends additionally require a compatible libHSL and
+`JULIA_HSL_LIBRARY_PATH` at runtime; an arbitrary `libcoinhsl` built for IPOPT
+is not necessarily ABI-compatible with the Julia `HSL.jl` wrapper.
+
+Warm-start primal values and multipliers are passed through the standard
+`x0`, `lam_x0`, and `lam_g0` nlpsol inputs, with `dual_initialized` enabled.
+The plugin returns `iter_count` plus `madnlp.primal_feas`,
+`madnlp.dual_feas`, and `madnlp.status`; Bioptim normalizes these fields.
+
+Bioptim online optimization callbacks are not enabled because the MadNLP
+plugin does not document an iteration callback. Bioptim's C compilation path is
+also disabled until its `generate_dependencies`/Importer workflow is covered by
+a supported-build integration test, even though current CasADi sources contain
+MadNLP code-generation hooks.
+
+Run the unit and optional plugin tests with:
+
+```bash
+pytest tests/shard4/test_solver_options.py tests/shard4/test_madnlp.py
+```

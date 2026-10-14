@@ -1,13 +1,9 @@
-import os
-
-print(os.getenv("PYTHONPATH"))
-
 from typing import Callable
 
 import numpy as np
 from casadi import vertcat, DM
 
-import biorbd
+import biorbd_casadi as biorbd
 from bioptim import (
     ConfigureVariables,
     Controls,

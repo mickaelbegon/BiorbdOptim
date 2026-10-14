@@ -22,6 +22,7 @@ from bioptim import (
     PhaseDynamics,
     SolutionMerge,
     OnlineOptim,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 
@@ -36,6 +37,7 @@ def prepare_ocp(
     phase_dynamics: PhaseDynamics = PhaseDynamics.SHARED_DURING_THE_PHASE,
     with_phase_time_equality: bool = False,
     expand_dynamics: bool = True,
+    ordering_strategy: OrderingStrategy = OrderingStrategy.VARIABLE_MAJOR,
 ) -> OptimalControlProgram:
     """
     Prepare the optimal control program. This example can be called as a normal single phase (all list len equals to 1)
@@ -184,6 +186,7 @@ def prepare_ocp(
         objective_functions=objective_functions,
         constraints=constraints,
         time_phase_mapping=time_phase_mapping,
+        ordering_strategy=ordering_strategy,
     )
 
 

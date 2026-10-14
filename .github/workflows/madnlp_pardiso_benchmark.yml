@@ -1,0 +1,229 @@
+name: MadNLP PARDISO benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      warmups:
+        description: Number of warm-up solves before measured repetitions
+        required: true
+        default: "1"
+      repetitions:
+        description: Number of hot measured solves
+        required: true
+        default: "3"
+  push:
+    branches:
+      - "codex/madnlp-linear-solvers"
+    paths:
+      - ".github/madnlp-linux-environment.yml"
+      - ".github/scripts/install_biorbd_casadi_linux.sh"
+      - ".github/workflows/madnlp_pardiso_benchmark.yml"
+      - "benchmarks/solver_benchmark.py"
+      - "benchmarks/merge_benchmark_results.py"
+      - "bioptim/interfaces/madnlp_options.py"
+      - "tests/shard4/test_madnlp.py"
+      - "tests/shard5/test_solver_options.py"
+
+permissions:
+  contents: read
+
+env:
+  CASADI_COMMIT: 4a565076185d9240687e10e2a8208bed639c226f
+  LIBMAD_COMMIT: 218a70f956b69759cf46c4e1ba671e5aa7c6b6cf
+  JULIA_CPU_TARGET: "generic"
+  JULIA_CUDA_USE_COMPAT: "false"
+  MKL_NUM_THREADS: "1"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+
+jobs:
+  benchmark:
+    name: MUMPS and three PARDISO MKL profiles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash -l {0}
+
+    steps:
+      - name: Checkout Bioptim and submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout PARDISO-enabled libMad
+        uses: actions/checkout@v4
+        with:
+          repository: mickaelbegon/libMad
+          ref: ${{ env.LIBMAD_COMMIT }}
+          path: .cache/libMad
+
+      - name: Checkout CasADi 3.8
+        uses: actions/checkout@v4
+        with:
+          repository: casadi/casadi
+          ref: ${{ env.CASADI_COMMIT }}
+          path: .cache/casadi-src
+
+      - name: Setup Conda environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: bioptim-madnlp-linux
+          environment-file: .github/madnlp-linux-environment.yml
+          conda-remove-defaults: true
+
+      - name: Restore CasADi and libMad runtime
+        id: pardiso-runtime-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/casadi-libmad-pardiso-runtime.tar.gz
+          key: casadi-${{ env.CASADI_COMMIT }}-libmad-${{ env.LIBMAD_COMMIT }}-abi0-ubuntu-24.04-v2
+
+      - name: Install Julia 1.12
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        uses: julia-actions/install-juliaup@v2
+        with:
+          channel: "1.12"
+
+      - name: Install patched JuliaC
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          julia -e 'using Pkg; Pkg.add(url="https://github.com/apozharski/JuliaC.jl.git", rev="73be8587a80bbb65dab7acd71d406f72867a3571"); Pkg.Apps.add(url="https://github.com/apozharski/JuliaC.jl.git", rev="73be8587a80bbb65dab7acd71d406f72867a3571")'
+          echo "$HOME/.julia/bin" >> "$GITHUB_PATH"
+
+      - name: Build PARDISO-enabled libMad
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          julia --project=.cache/libMad -e 'using Pkg; Pkg.instantiate()'
+          cmake \
+            -S .cache/libMad \
+            -B .cache/libMad-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/.cache/libMad-install"
+          cmake --build .cache/libMad-build --target install --parallel 2
+          tar -C .cache/libMad-install -czf .cache/libMad-pardiso-mkl.tar.gz .
+
+      - name: Build CasADi against libMad
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          cmake \
+            -S .cache/casadi-src \
+            -B .cache/casadi-build \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" \
+            -DCMAKE_INSTALL_PREFIX="$CONDA_PREFIX" \
+            -DWITH_PYTHON=ON \
+            -DWITH_MADNLP=ON \
+            -DWITH_BUILD_MADNLP=ON \
+            -DLIBMAD_TAR_PATH="file://$GITHUB_WORKSPACE/.cache/libMad-pardiso-mkl.tar.gz" \
+            -DPYTHON_EXECUTABLE="$(command -v python)"
+          cmake --build .cache/casadi-build --target install --parallel 2
+
+      - name: Archive CasADi and libMad runtime
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        run: |
+          cd "$CONDA_PREFIX"
+          tar -czf "$GITHUB_WORKSPACE/.cache/casadi-libmad-pardiso-runtime.tar.gz" \
+            include/casadi \
+            lib/libMad.so \
+            lib/libcasadi* \
+            lib/cmake/casadi \
+            lib/python3.11/site-packages/casadi \
+            share/julia
+
+      - name: Save CasADi and libMad runtime
+        if: steps.pardiso-runtime-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/casadi-libmad-pardiso-runtime.tar.gz
+          key: ${{ steps.pardiso-runtime-cache.outputs.cache-primary-key }}
+
+      - name: Extract cached CasADi and libMad runtime
+        if: steps.pardiso-runtime-cache.outputs.cache-hit == 'true'
+        run: tar -C "$CONDA_PREFIX" -xzf .cache/casadi-libmad-pardiso-runtime.tar.gz
+
+      - name: Configure libMad runtime
+        run: |
+          echo "LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$CONDA_PREFIX/share/julia/lib:${LD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+          libssl="$(find "$CONDA_PREFIX/share/julia" -name 'libssl.so*' -print -quit 2>/dev/null || true)"
+          if [[ -n "$libssl" ]]; then
+            echo "LD_PRELOAD=$libssl" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install biorbd and Bioptim
+        run: |
+          .github/scripts/install_biorbd_casadi_linux.sh
+          python -m pip install --no-deps -e .
+
+      - name: Verify PARDISO selection through CasADi
+        env:
+          BIOPTIM_TEST_MADNLP_PARDISO_MKL: "1"
+        run: |
+          python - <<'PY'
+          import casadi as cas
+
+          print(f"CasADi {cas.__version__}")
+          assert cas.has_nlpsol("madnlp")
+          PY
+          pytest -q tests/shard4/test_madnlp.py::test_madnlp_pardiso_mkl_backend
+
+      - name: Run prior benchmark matrix with both linear solvers
+        env:
+          MPLCONFIGDIR: /tmp/matplotlib
+          PYTHONPATH: ${{ github.workspace }}
+          WARMUPS: ${{ inputs.warmups || '1' }}
+          REPETITIONS: ${{ inputs.repetitions || '3' }}
+        run: |
+          result_root="$GITHUB_WORKSPACE/benchmarks/results/pardiso-linux"
+          mkdir -p "$result_root"
+
+          cases=(pendulum pendulum cube static_arm free_time multiphase contact_inequality holonomic_muscle muscle_fatigue)
+          sizes=(20 500 10 10 10 10 10 5 50)
+          labels=(pendulum-20 pendulum-500 cube-10 static-arm-10 free-time-10 multiphase-10 contact-10 holonomic-muscle-5 muscle-fatigue-50)
+          profiles=(mumps baseline robust robust_inertia_free)
+
+          for index in "${!cases[@]}"; do
+            for profile in "${profiles[@]}"; do
+              output="$result_root/${labels[$index]}-madnlp-$profile"
+              run_directory="$(mktemp -d)"
+              if [[ "$profile" == "mumps" ]]; then
+                profile_args=(--madnlp-linear-solver mumps)
+              else
+                profile_args=(--madnlp-pardiso-profile "$profile")
+              fi
+              if ! (
+                cd "$run_directory"
+                python -m benchmarks.solver_benchmark \
+                  --cases "${cases[$index]}" \
+                  --solvers madnlp \
+                  --sizes "${sizes[$index]}" \
+                  "${profile_args[@]}" \
+                  --warmups "$WARMUPS" \
+                  --repetitions "$REPETITIONS" \
+                  --max-iterations 500 \
+                  --output "$output"
+              ); then
+                echo "::warning title=Benchmark combination failed::${labels[$index]} with $profile did not produce a successful solve"
+              fi
+            done
+          done
+
+      - name: Merge benchmark results
+        run: |
+          python benchmarks/merge_benchmark_results.py \
+            benchmarks/results/pardiso-linux \
+            --output benchmarks/results/pardiso-linux-benchmark
+          cat benchmarks/results/pardiso-linux-benchmark.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload PARDISO benchmark
+        uses: actions/upload-artifact@v4
+        with:
+          name: madnlp-pardiso-benchmark-${{ github.run_id }}
+          path: |
+            benchmarks/results/pardiso-linux/**
+            benchmarks/results/pardiso-linux-benchmark.*
+          if-no-files-found: error
+          retention-days: 30

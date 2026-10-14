@@ -207,18 +207,22 @@ class Solution:
         if not isinstance(sol, dict):
             raise ValueError("The _sol entry should be a dictionary")
 
-        is_ipopt_like = sol["solver"] in (SolverType.IPOPT.value, SolverType.FATROP.value)
+        is_casadi_nlp = sol["solver"] in (
+            SolverType.IPOPT.value,
+            SolverType.FATROP.value,
+            SolverType.MADNLP.value,
+        )
 
         return cls(
             ocp=ocp,
             vector=sol["x"],
-            cost=sol["f"] if is_ipopt_like else None,
-            constraints=sol["g"] if is_ipopt_like else None,
-            lam_g=sol["lam_g"] if is_ipopt_like else None,
-            lam_p=sol["lam_p"] if is_ipopt_like else None,
-            lam_x=sol["lam_x"] if is_ipopt_like else None,
-            inf_pr=sol["inf_pr"] if is_ipopt_like else None,
-            inf_du=sol["inf_du"] if is_ipopt_like else None,
+            cost=sol["f"] if is_casadi_nlp else None,
+            constraints=sol["g"] if is_casadi_nlp else None,
+            lam_g=sol["lam_g"] if is_casadi_nlp else None,
+            lam_p=sol["lam_p"] if is_casadi_nlp else None,
+            lam_x=sol["lam_x"] if is_casadi_nlp else None,
+            inf_pr=sol["inf_pr"] if is_casadi_nlp else None,
+            inf_du=sol["inf_du"] if is_casadi_nlp else None,
             solver_time_to_optimize=sol["solver_time_to_optimize"],
             real_time_to_optimize=sol["real_time_to_optimize"],
             iterations=sol["iter"],
@@ -277,12 +281,11 @@ class Solution:
 
         dt, sol_states, sol_controls, sol_params, sol_algebraic_states = sol
 
-        vector = np.ndarray((0, 1))
-
         # For time
         if len(dt.shape) == 1:
             dt = dt[:, np.newaxis]
-        vector = np.concatenate((vector, dt))
+
+        state_vector = [dt]
 
         # For states
         for p, ss in enumerate(sol_states):
@@ -299,9 +302,8 @@ class Solution:
 
             for i in range(all_ns[p] * nb_intermediate_frames + 1):
                 for key in ss.keys():
-                    vector = np.concatenate(
-                        (vector, ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, np.newaxis])
-                    )
+                    state_vector.append(ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, None])
+        vector = np.vstack(state_vector)
 
         # For controls
         for p, ss in enumerate(sol_controls):

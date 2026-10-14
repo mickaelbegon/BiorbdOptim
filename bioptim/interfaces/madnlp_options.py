@@ -1,0 +1,214 @@
+from dataclasses import dataclass, field
+from typing import Any
+
+import casadi as cas
+from packaging.version import parse as parse_version
+
+from .abstract_options import GenericSolver
+from ..misc.enums import OnlineOptim, SolverType
+from ..misc.parameters_types import (
+    AnyDict,
+    AnyDictOptional,
+    Bool,
+    BoolOptional,
+    Float,
+    Int,
+    Str,
+)
+
+MADNLP_UNAVAILABLE = (
+    "The CasADi MadNLP plugin is not available in the installed CasADi build. "
+    "Install a CasADi distribution compiled with MadNLP support or follow the "
+    "Bioptim MadNLP installation instructions."
+)
+
+MADNLP_LINEAR_SOLVERS = {
+    "mumps": "MumpsSolver",
+    "mumpssolver": "MumpsSolver",
+    "umfpack": "UmfpackSolver",
+    "umfpacksolver": "UmfpackSolver",
+    "lapack": "LapackCPUSolver",
+    "lapack_cpu": "LapackCPUSolver",
+    "lapackcpusolver": "LapackCPUSolver",
+    "pardiso_mkl": "PardisoMKLSolver",
+    "pardisomkl": "PardisoMKLSolver",
+    "pardisomklsolver": "PardisoMKLSolver",
+    "robust_pardiso_mkl": "RobustPardisoMKLSolver",
+    "pardiso_mkl_robust": "RobustPardisoMKLSolver",
+    "robustpardisomklsolver": "RobustPardisoMKLSolver",
+}
+
+MADNLP_PARDISO_PROFILES = ("baseline", "robust", "robust_inertia_free")
+MADNLP_PARDISO_PROFILE_OPTIONS = (
+    "inertia_correction_method",
+    "default_primal_regularization",
+    "default_dual_regularization",
+)
+
+
+def has_madnlp() -> bool:
+    """Return whether the installed CasADi build exposes the MadNLP nlpsol plugin."""
+    has_nlpsol = getattr(cas, "has_nlpsol", None)
+    if has_nlpsol is not None:
+        try:
+            return bool(has_nlpsol("madnlp"))
+        except RuntimeError:
+            return False
+    try:
+        cas.nlpsol_options("madnlp")
+    except RuntimeError:
+        return False
+    return True
+
+
+@dataclass
+class MADNLP(GenericSolver):
+    """Options for CasADi's ``madnlp`` nlpsol plugin.
+
+    Solver-specific options must be nested under CasADi's ``madnlp`` dictionary.
+    The plugin embeds a Julia runtime; it is not included in standard CasADi wheels.
+    """
+
+    type: SolverType = SolverType.MADNLP
+    show_online_optim: BoolOptional = None
+    online_optim: OnlineOptim | None = None
+    show_options: AnyDictOptional = None
+    _tol: Float = 1e-6
+    _max_iter: Int = 1000
+    _print_level: Int = 3
+    _linear_solver: Str = "MumpsSolver"
+    _pardiso_profile: Str | None = None
+    _c_compile: Bool = False
+    _madnlp_options: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not has_madnlp():
+            raise RuntimeError(MADNLP_UNAVAILABLE)
+
+    @property
+    def tol(self) -> Float:
+        return self._tol
+
+    @property
+    def max_iter(self) -> Int:
+        return self._max_iter
+
+    @property
+    def print_level(self) -> Int:
+        return self._print_level
+
+    @property
+    def linear_solver(self) -> Str:
+        return self._linear_solver
+
+    @property
+    def pardiso_profile(self) -> Str | None:
+        return self._pardiso_profile
+
+    @property
+    def c_compile(self) -> Bool:
+        return self._c_compile
+
+    def set_convergence_tolerance(self, tol: Float) -> None:
+        self._tol = tol
+
+    def set_constraint_tolerance(self, tol: Float) -> None:
+        # MadNLP has no independent constraint tolerance. Its `tol` is the
+        # termination threshold for primal, dual, and complementarity errors.
+        self._tol = tol
+
+    def set_maximum_iterations(self, num: Int) -> None:
+        self._max_iter = num
+
+    def set_print_level(self, value: Int | Str) -> None:
+        levels = {"TRACE": 1, "DEBUG": 2, "INFO": 3, "NOTICE": 4, "WARN": 5, "ERROR": 6}
+        if isinstance(value, str):
+            try:
+                value = levels[value.upper()]
+            except KeyError as error:
+                raise ValueError("MadNLP print level must be TRACE, DEBUG, INFO, NOTICE, WARN, or ERROR") from error
+        if value not in levels.values():
+            raise ValueError("MadNLP print level must be an integer from 1 to 6 or a MadNLP log-level name")
+        self._print_level = value
+
+    def set_linear_solver(self, value: Str) -> None:
+        """Select a CPU linear solver bundled in the current MadNLP ``libMad`` runtime.
+
+        Bioptim accepts aliases and Julia type names. ``as_dict`` converts the
+        canonical type name for the C interface used by the installed CasADi.
+        """
+        if not isinstance(value, str):
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL")
+        if self._pardiso_profile is not None:
+            for option in MADNLP_PARDISO_PROFILE_OPTIONS:
+                self._madnlp_options.pop(option, None)
+        key = value.replace("-", "_").replace(" ", "_").lower()
+        try:
+            self._linear_solver = MADNLP_LINEAR_SOLVERS[key]
+        except KeyError as error:
+            raise ValueError("MadNLP linear solver must be MUMPS, UMFPACK, LAPACK CPU, or PARDISO MKL") from error
+        self._pardiso_profile = {
+            "PardisoMKLSolver": "baseline",
+            "RobustPardisoMKLSolver": "robust",
+        }.get(self._linear_solver)
+
+    def set_pardiso_profile(self, value: Str) -> None:
+        """Configure one of the reproducible PARDISO robustness profiles."""
+        if not isinstance(value, str):
+            raise ValueError("MadNLP PARDISO profile must be baseline, robust, or robust_inertia_free")
+        profile = value.replace("-", "_").replace(" ", "_").lower()
+        if profile not in MADNLP_PARDISO_PROFILES:
+            raise ValueError("MadNLP PARDISO profile must be baseline, robust, or robust_inertia_free")
+
+        for option in MADNLP_PARDISO_PROFILE_OPTIONS:
+            self._madnlp_options.pop(option, None)
+
+        self.set_linear_solver("pardiso_mkl" if profile == "baseline" else "robust_pardiso_mkl")
+        if profile == "robust_inertia_free":
+            self._madnlp_options.update(
+                {
+                    "inertia_correction_method": "InertiaFree",
+                    "default_primal_regularization": 1e-8,
+                    "default_dual_regularization": 1e-8,
+                }
+            )
+        self._pardiso_profile = profile
+
+    def set_warm_start_options(self, val: Float = 1e-10) -> None:
+        """Enable use of multipliers supplied through CasADi's standard nlpsol inputs."""
+        self._madnlp_options["dual_initialized"] = True
+        self._madnlp_options["mu_init"] = val
+
+    def set_option_unsafe(self, val: Any, name: Str) -> None:
+        """Pass an advanced option to MadNLP; the plugin validates it on construction."""
+        self._madnlp_options[name] = val
+
+    def set_c_compile(self, val: Bool) -> None:
+        if val:
+            raise NotImplementedError(
+                "C compilation has not been validated with Bioptim and the current CasADi MadNLP plugin."
+            )
+        self._c_compile = False
+
+    def as_dict(self, solver) -> AnyDict:
+        linear_solver = self._linear_solver
+        print_level = self._print_level
+        if parse_version(cas.__version__).release < (3, 8):
+            # CasADi 3.7 uses madnlp_c, whose names and log levels differ from libMad.
+            legacy_linear_solvers = {
+                "MumpsSolver": "mumps",
+                "UmfpackSolver": "umfpack",
+                "LapackCPUSolver": "lapack_cpu",
+            }
+            if linear_solver not in legacy_linear_solvers:
+                raise NotImplementedError("MadNLP PARDISO requires CasADi 3.8 or newer with a PARDISO-enabled libMad")
+            linear_solver = legacy_linear_solvers[linear_solver]
+            print_level = 6 - print_level
+        madnlp = {
+            "tol": self._tol,
+            "max_iter": self._max_iter,
+            "print_level": print_level,
+            "linear_solver": linear_solver,
+            **self._madnlp_options,
+        }
+        return {"madnlp": madnlp, **solver.options_common}
