@@ -8,7 +8,6 @@ from casadi import DM, vertcat
 from bioptim import Solver, SolutionMerge, SolutionIntegrator
 from ..utils import TestUtils
 
-
 # Integrated values should be handled another way
 # In the meantime, let's skip this test
 # Please note that the test is very sensitive, so approximate values are enough

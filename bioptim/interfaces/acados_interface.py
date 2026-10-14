@@ -1,5 +1,6 @@
 from time import perf_counter
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import numpy as np
 from scipy import linalg
@@ -7,11 +8,15 @@ from casadi import SX, vertcat, Function
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
 from .solver_interface import SolverInterface
+from .acados_utils import scaled_control_bounds
 from ..interfaces import Solver
 from ..misc.enums import Node, SolverType, PhaseDynamics
 from ..limits.objective_functions import ObjectiveFunction, ObjectiveFcn
 from ..limits.path_conditions import Bounds
 from ..misc.enums import InterpolationType
+
+if TYPE_CHECKING:
+    from ..optimization.solution.solution import Solution
 
 
 from ..misc.parameters_types import (
@@ -19,6 +24,14 @@ from ..misc.parameters_types import (
     Bool,
     AnyListorDict,
 )
+
+ACADOS_STATUS_LABELS = {
+    0: "success",
+    1: "maximum_iterations_reached",
+    2: "minimum_step_reached",
+    3: "qp_solver_failure",
+    4: "ready",
+}
 
 
 class AcadosInterface(SolverInterface):
@@ -267,9 +280,19 @@ class AcadosInterface(SolverInterface):
             )
 
         for key in ocp.nlp[0].controls.keys():
-            if not np.all(np.all(ocp.nlp[0].u_bounds[key].min.T == ocp.nlp[0].u_bounds[key].min.T[0, :], axis=0)):
+            if not np.all(
+                np.all(
+                    ocp.nlp[0].u_bounds[key].min.T == ocp.nlp[0].u_bounds[key].min.T[0, :],
+                    axis=0,
+                )
+            ):
                 raise NotImplementedError("u_bounds min must be the same at each shooting point with ACADOS")
-            if not np.all(np.all(ocp.nlp[0].u_bounds[key].max.T == ocp.nlp[0].u_bounds[key].max.T[0, :], axis=0)):
+            if not np.all(
+                np.all(
+                    ocp.nlp[0].u_bounds[key].max.T == ocp.nlp[0].u_bounds[key].max.T[0, :],
+                    axis=0,
+                )
+            ):
                 raise NotImplementedError("u_bounds max must be the same at each shooting point with ACADOS")
 
             if (
@@ -366,16 +389,9 @@ class AcadosInterface(SolverInterface):
                 self.x_bound_min[index, i] = x_tp.min[:, i]
 
         # setup control constraints
-        u_bounds_max = np.ndarray((self.acados_ocp.dims.nu, 1))
-        u_bounds_min = np.ndarray((self.acados_ocp.dims.nu, 1))
-        for key in ocp.nlp[0].controls.keys():
-            u_tp = ocp.nlp[0].u_bounds[key].scale(ocp.nlp[0].u_scaling[key].scaling)
-            index = ocp.nlp[0].controls[key].index
-            u_bounds_max[index, 0] = np.array(u_tp.max[:, 0])
-            u_bounds_min[index, 0] = np.array(u_tp.min[:, 0])
-
-        self.acados_ocp.constraints.lbu = u_bounds_max
-        self.acados_ocp.constraints.ubu = u_bounds_min
+        u_bounds_min, u_bounds_max = scaled_control_bounds(ocp.nlp[0])
+        self.acados_ocp.constraints.lbu = u_bounds_min[:, np.newaxis]
+        self.acados_ocp.constraints.ubu = u_bounds_max[:, np.newaxis]
         self.acados_ocp.constraints.idxbu = np.array(range(self.acados_ocp.dims.nu))
         self.acados_ocp.dims.nbu = self.acados_ocp.dims.nu
 
@@ -472,7 +488,11 @@ class AcadosInterface(SolverInterface):
                     v_var[rows] = 1.0
                     return v_var, rows
 
-                if objectives.node[0] not in [Node.INTERMEDIATES, Node.PENULTIMATE, Node.END]:
+                if objectives.node[0] not in [
+                    Node.INTERMEDIATES,
+                    Node.PENULTIMATE,
+                    Node.END,
+                ]:
                     v_var, rows = _adjust_dim()
                     if is_state:
                         acados.Vx0 = np.vstack((acados.Vx0, np.diag(v_var)))
@@ -511,9 +531,13 @@ class AcadosInterface(SolverInterface):
                 u = vertcat(u, u)
 
             acados.lagrange_costs = vertcat(
-                acados.lagrange_costs, objectives.function[0](t, dt, x, u, p, a, d).reshape((-1, 1))
+                acados.lagrange_costs,
+                objectives.function[0](t, dt, x, u, p, a, d).reshape((-1, 1)),
             )
-            acados.W = linalg.block_diag(acados.W, np.diag([objectives.weight] * objectives.function[0].numel_out()))
+            acados.W = linalg.block_diag(
+                acados.W,
+                np.diag([objectives.weight] * objectives.function[0].numel_out()),
+            )
 
             node_idx = objectives.node_idx[:-1] if objectives.node[0] == Node.ALL else objectives.node_idx
             if objectives.target is not None:
@@ -522,9 +546,14 @@ class AcadosInterface(SolverInterface):
                 acados.y_ref.append([np.zeros((objectives.function[0].numel_out(), 1)) for _ in node_idx])
 
         def add_nonlinear_ls_mayer(acados, objectives, t, dt, x, u, p, a, d, node=None):
-            if objectives.node[0] not in [Node.INTERMEDIATES, Node.PENULTIMATE, Node.END]:
+            if objectives.node[0] not in [
+                Node.INTERMEDIATES,
+                Node.PENULTIMATE,
+                Node.END,
+            ]:
                 acados.W_0 = linalg.block_diag(
-                    acados.W_0, np.diag([objectives.weight] * objectives.function[0].numel_out())
+                    acados.W_0,
+                    np.diag([objectives.weight] * objectives.function[0].numel_out()),
                 )
 
                 x_tp = x
@@ -538,7 +567,8 @@ class AcadosInterface(SolverInterface):
                 u_tp = u_tp if objectives.function[0].size_in("u") != (0, 0) else []
 
                 acados.mayer_costs = vertcat(
-                    acados.mayer_costs, objectives.function[0](t, dt, x_tp, u_tp, p, a, d).reshape((-1, 1))
+                    acados.mayer_costs,
+                    objectives.function[0](t, dt, x_tp, u_tp, p, a, d).reshape((-1, 1)),
                 )
 
                 if objectives.target is not None:
@@ -548,7 +578,8 @@ class AcadosInterface(SolverInterface):
 
             if objectives.node[0] in [Node.END, Node.ALL]:
                 acados.W_e = linalg.block_diag(
-                    acados.W_e, np.diag([objectives.weight] * objectives.function[-1].numel_out())
+                    acados.W_e,
+                    np.diag([objectives.weight] * objectives.function[-1].numel_out()),
                 )
                 x_tp = x
                 u_tp = u
@@ -561,7 +592,8 @@ class AcadosInterface(SolverInterface):
                 u_tp = u_tp if objectives.function[-1].size_in("u") != (0, 0) else []
 
                 acados.mayer_costs_e = vertcat(
-                    acados.mayer_costs_e, objectives.function[-1](t, dt, x_tp, u_tp, p, a, d).reshape((-1, 1))
+                    acados.mayer_costs_e,
+                    objectives.function[-1](t, dt, x_tp, u_tp, p, a, d).reshape((-1, 1)),
                 )
 
                 if objectives.target is not None:
@@ -582,7 +614,10 @@ class AcadosInterface(SolverInterface):
         self.W_e = np.zeros((0, 0))
         self.W_0 = np.zeros((0, 0))
         allowed_control_objectives = [ObjectiveFcn.Lagrange.MINIMIZE_CONTROL]
-        allowed_state_objectives = [ObjectiveFcn.Lagrange.MINIMIZE_STATE, ObjectiveFcn.Mayer.TRACK_STATE]
+        allowed_state_objectives = [
+            ObjectiveFcn.Lagrange.MINIMIZE_STATE,
+            ObjectiveFcn.Mayer.TRACK_STATE,
+        ]
 
         if self.acados_ocp.cost.cost_type == "LINEAR_LS":
             n_states = ocp.nlp[0].states.shape
@@ -800,14 +835,7 @@ class AcadosInterface(SolverInterface):
             self.ocp_solver.set(n, "u", u_init)
 
             # The u_bounds need to be ordered by index that's why we use a for loop
-            u_bounds_max = np.ndarray(self.acados_ocp.dims.nu)
-            u_bounds_min = np.ndarray(self.acados_ocp.dims.nu)
-            for key in self.ocp.nlp[0].controls.keys():
-                u_tp = self.ocp.nlp[0].u_bounds[key]
-                index = self.ocp.nlp[0].controls[key].index
-                u_bounds_max[index] = np.array(u_tp.max[:, 0])
-                u_bounds_min[index] = np.array(u_tp.min[:, 0])
-
+            u_bounds_min, u_bounds_max = scaled_control_bounds(self.ocp.nlp[0])
             self.ocp_solver.constraints_set(n, "lbu", u_bounds_min)
             self.ocp_solver.constraints_set(n, "ubu", u_bounds_max)
             self.ocp_solver.constraints_set(n, "uh", self.all_g_bounds.max[:, 0])
@@ -863,6 +891,7 @@ class AcadosInterface(SolverInterface):
             "iter": self.ocp_solver.get_stats("sqp_iter"),
             "status": self.status,
             "solver": SolverType.ACADOS,
+            "solver_diagnostics": self.get_solver_diagnostics(),
         }
 
         out["x"] = vertcat(out["x"], acados_x.reshape(-1, 1, order="F"))
@@ -880,6 +909,91 @@ class AcadosInterface(SolverInterface):
             out.append(self.out[key])
 
         return out[0] if len(out) == 1 else out
+
+    def get_solver_diagnostics(self) -> dict:
+        """Return stable, best-effort diagnostics for the last Acados solve."""
+
+        diagnostics = {
+            "status": self.status,
+            "status_label": ACADOS_STATUS_LABELS.get(self.status, "unknown"),
+            "wall_time": self.real_time_to_optimize,
+        }
+        if self.ocp_solver is None:
+            return diagnostics
+
+        stat_names = (
+            "res_stat",
+            "res_eq",
+            "res_ineq",
+            "res_comp",
+            "sqp_iter",
+            "qp_iter",
+            "alpha",
+            "time_tot",
+            "statistics",
+        )
+        for name in stat_names:
+            try:
+                diagnostics[name] = self.ocp_solver.get_stats(name)
+            except Exception:
+                # The available statistics depend on the acados_template version and solver configuration.
+                continue
+        diagnostics["iterates"] = self.get_iterates()
+        return diagnostics
+
+    def get_iterates(self) -> list[dict]:
+        """Return the current Acados iterate without exposing acados_template internals."""
+
+        if self.ocp_solver is None:
+            raise RuntimeError("Acados must be solved before its iterates can be retrieved")
+        iterates = []
+        for node in range(self.acados_ocp.dims.N + 1):
+            iterate = {"x": np.asarray(self.ocp_solver.get(node, "x")).copy()}
+            for field in ("u", "z", "pi", "lam", "sl", "su"):
+                if field in ("u", "pi") and node == self.acados_ocp.dims.N:
+                    iterate[field] = None
+                    continue
+                try:
+                    iterate[field] = np.asarray(self.ocp_solver.get(node, field)).copy()
+                except Exception:
+                    iterate[field] = None
+            iterates.append(iterate)
+        return iterates
+
+    def set_iterates(self, iterates: list[dict], include_multipliers: bool = False) -> None:
+        """Initialize Acados from compatible iterates.
+
+        Primal fields (``x``, ``u`` and ``z``) are always transferred. Multipliers (``pi``, ``lam``, ``sl`` and
+        ``su``) are transferred only when explicitly requested; their dimensions must already match the Acados OCP.
+        """
+
+        if self.ocp_solver is None:
+            raise RuntimeError("The Acados solver must be created before its iterates can be initialized")
+        if len(iterates) != self.acados_ocp.dims.N + 1:
+            raise ValueError(f"Expected {self.acados_ocp.dims.N + 1} Acados nodes, got {len(iterates)}")
+
+        primal_fields = ("x", "u", "z")
+        multiplier_fields = ("pi", "lam", "sl", "su") if include_multipliers else ()
+        for node, iterate in enumerate(iterates):
+            for field in primal_fields + multiplier_fields:
+                value = iterate.get(field)
+                if value is None:
+                    continue
+                if field in ("u", "pi") and node == self.acados_ocp.dims.N:
+                    raise ValueError(f"Acados field '{field}' is not defined at the terminal node")
+                self.ocp_solver.set(node, field, np.asarray(value))
+
+    def set_lagrange_multiplier(self, sol: "Solution") -> None:
+        """Transfer Acados multipliers only from a compatible Acados iterate."""
+
+        diagnostics = getattr(sol, "solver_diagnostics", None) or {}
+        iterates = diagnostics.get("iterates")
+        if iterates is None:
+            raise ValueError(
+                "IPOPT/NLP multipliers cannot be converted generically to Acados QP multipliers. "
+                "Use a primal-only warm start, or provide compatible Acados iterates."
+            )
+        self.set_iterates(iterates, include_multipliers=True)
 
     def solve(self, expand_during_shake_tree: Bool = False) -> AnyListorDict:
         """

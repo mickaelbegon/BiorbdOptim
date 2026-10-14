@@ -3,7 +3,6 @@ import pickle
 import numpy as np
 from casadi import jacobian, gradient, sum1, Function
 from matplotlib import pyplot as plt
-from matplotlib.cm import get_cmap
 
 from ..misc.parameters_types import Str, Int
 
@@ -12,13 +11,13 @@ def create_ipopt_output_plot(ocp, interface):
     """
     This function creates the plots for the ipopt output: f, g, inf_pr, inf_du.
     """
-    ipopt_fig, axs = plt.subplots(3, 1, num="IPOPT output")
+    ipopt_fig, axs = plt.subplots(3, 1, num="IPOPT output", clear=True)
     axs[0].set_ylabel("f", fontweight="bold")
     axs[1].set_ylabel("inf_pr", fontweight="bold")
     axs[2].set_ylabel("inf_du", fontweight="bold")
 
     plots = []
-    colors = get_cmap("viridis")
+    colors = plt.get_cmap("viridis")
     for i in range(3):
         plot = axs[i].plot([0], [1], linestyle="-", marker=".", color="k")
         plots.append(plot[0])

@@ -4,7 +4,7 @@ from bioptim import (
     QuadratureRule,
     VariationalBiorbdModel,
 )
-from casadi import MX, Function
+from casadi import DM, MX, SX, Function
 
 from tests.utils import TestUtils
 
@@ -32,6 +32,10 @@ def test_variational_model():
     TestUtils.assert_equal(model_right.discrete_lagrangian(q, qdot, time_step), 1.88558012)
     model_left = VariationalBiorbdModel(biorbd_model_path, discrete_approximation=QuadratureRule.RECTANGLE_LEFT)
     TestUtils.assert_equal(model_left.discrete_lagrangian(q, qdot, time_step), 0.44032649)
+    model_gauss_legendre = VariationalBiorbdModel(
+        biorbd_model_path, discrete_approximation=QuadratureRule.GAUSS_LEGENDRE_2
+    )
+    TestUtils.assert_equal(model_gauss_legendre.discrete_lagrangian(q, qdot, time_step), -2.50240987)
 
     control0 = MX([10.0, 5.0])
     control1 = MX([3.0, 9.0])
@@ -206,3 +210,45 @@ def test_variational_model():
         compute_final_states(time_step, q_prev, q_cur, qdot, control_prev, control_cur, lambdas),
         [2.50463576, 2.32608004, 8.89007052, 2.0],
     )
+
+
+def test_gauss_legendre_two_point_matches_quadratic_action(monkeypatch):
+    """Gauss--Legendre two-point integrates a quadratic affine-path action exactly."""
+    from bioptim.examples.discrete_mechanics_and_optimal_control import (
+        example_variational_integrator_pendulum as ocp_module,
+    )
+
+    biorbd_model_path = TestUtils.module_folder(ocp_module) + "/models/pendulum.bioMod"
+    model = VariationalBiorbdModel(biorbd_model_path, discrete_approximation=QuadratureRule.GAUSS_LEGENDRE_2)
+
+    q_symbol = MX.sym("q", 1, 1)
+    qdot_symbol = MX.sym("qdot", 1, 1)
+    quadratic_lagrangian = Function(
+        "quadratic_lagrangian",
+        [q_symbol, qdot_symbol],
+        [q_symbol**2 + 2 * qdot_symbol**2],
+    )
+    monkeypatch.setattr(model, "lagrangian", lambda: quadratic_lagrangian)
+
+    q1 = DM([2.0])
+    q2 = DM([5.0])
+    time_step = DM(0.7)
+    qdot = (q2 - q1) / time_step
+    exact_affine_action = time_step * (q1**2 + q1 * q2 + q2**2) / 3 + 2 * time_step * qdot**2
+
+    TestUtils.assert_equal(model.discrete_lagrangian(q1, q2, time_step), exact_affine_action)
+
+    for symbolic_type in (SX, MX):
+        q1_symbol = symbolic_type.sym("q1", 1, 1)
+        q2_symbol = symbolic_type.sym("q2", 1, 1)
+        time_step_symbol = symbolic_type.sym("h", 1, 1)
+        discrete_lagrangian = model.discrete_lagrangian(q1_symbol, q2_symbol, time_step_symbol)
+        assert isinstance(discrete_lagrangian, symbolic_type)
+        TestUtils.assert_equal(
+            Function(
+                "discrete_lagrangian",
+                [q1_symbol, q2_symbol, time_step_symbol],
+                [discrete_lagrangian],
+            )(q1, q2, time_step),
+            exact_affine_action,
+        )

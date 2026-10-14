@@ -5,10 +5,25 @@ Tests of the examples of the variational integrator.
 import os
 
 import numpy.testing as npt
-from bioptim import Solver, SolutionMerge
+from bioptim import QuadratureRule, Solver, SolutionMerge
 import pytest
 
 from ..utils import TestUtils
+
+
+def test_variational_pendulum_prepares_with_gauss_legendre_2():
+    """The example exposes the selected higher-order discrete-Lagrangian rule."""
+    from bioptim.examples.discrete_mechanics_and_optimal_control import example_variational_integrator_pendulum
+
+    bioptim_folder = TestUtils.module_folder(example_variational_integrator_pendulum)
+    ocp = example_variational_integrator_pendulum.prepare_ocp(
+        bio_model_path=bioptim_folder + "/models/pendulum.bioMod",
+        final_time=1,
+        n_shooting=2,
+        discrete_approximation=QuadratureRule.GAUSS_LEGENDRE_2,
+    )
+
+    assert ocp.nlp[0].model.discrete_approximation == QuadratureRule.GAUSS_LEGENDRE_2
 
 
 @pytest.mark.parametrize("use_sx", [False, True])

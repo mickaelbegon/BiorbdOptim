@@ -33,9 +33,10 @@ def test_solver_type():
     assert SolverType.ACADOS.value == "ACADOS"
     assert SolverType.SQP.value == "SqpMethod"
     assert SolverType.NONE.value == None
+    assert SolverType.MADNLP.value == "madnlp"
 
     # verify the number of elements
-    assert len(SolverType) == 4
+    assert len(SolverType) == 5
 
 
 def test_node():
@@ -148,9 +149,10 @@ def test_quadrature_rule():
     assert QuadratureRule.MIDPOINT.value == "midpoint"
     assert QuadratureRule.APPROXIMATE_TRAPEZOIDAL.value == "approximate_trapezoidal"
     assert QuadratureRule.TRAPEZOIDAL.value == "trapezoidal"
+    assert QuadratureRule.GAUSS_LEGENDRE_2.value == "gauss_legendre_2"
 
     # verify the number of elements
-    assert len(QuadratureRule) == 6
+    assert len(QuadratureRule) == 7
 
 
 def test_soft_contact_dynamics():

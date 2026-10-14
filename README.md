@@ -895,6 +895,35 @@ Mechanic and Optimal Control (DMOC) and Discrete Mechanics and Optimal Control i
 Since the class inherits from `HolonomicBiorbdModel`, all the `HolonomicBiorbdModel` and `BiorbdModel` methods are
 available. This class is used in `VariationalOptimalControlProgram`. You can refer to the examples in
 `bioptim/examples/discrete_mechanics_and_optimal_control` to see how to use it.
+
+#### Discrete Lagrangian quadrature
+
+The `discrete_approximation` argument selects the quadrature used to construct the discrete Lagrangian
+`L_d(q_k, q_{k+1}; h)`. It is distinct from the `integration_rule` used for Lagrange objective terms and from
+`control_discrete_approximation`, which selects the discrete-force approximation. The latter remains configured
+independently; adding action quadrature stages does not add force stages.
+
+For smooth problems, `QuadratureRule.GAUSS_LEGENDRE_2` evaluates the Lagrangian at the two Gauss--Legendre points
+`c_- = 1/2 - sqrt(3)/6` and `c_+ = 1/2 + sqrt(3)/6`, with weights `1/2`, along the affine segment
+`q(c) = (1 - c) * q_k + c * q_{k+1}` and constant velocity `qdot = (q_{k+1} - q_k) / h`:
+
+```python
+from bioptim import QuadratureRule, VariationalBiorbdModel
+
+bio_model = VariationalBiorbdModel(
+    "path/to/model.bioMod",
+    discrete_approximation=QuadratureRule.GAUSS_LEGENDRE_2,
+)
+```
+
+This quadrature is exact for an integrand that is polynomial of degree at most three along that segment and has a
+local action-quadrature error of order `O(h**5)`. This is not, by itself, a fourth-order variational integrator:
+the current construction uses an affine configuration interpolant and a constant secant velocity, which generically
+limits the global integrator order to two. Use it to reduce the action-quadrature error for smooth dynamics, then
+verify the observed convergence on the problem of interest. Achieving a higher global order requires internal stages
+and an interpolant of degree at least two. For background, see Marsden and West, *Discrete Mechanics and Variational
+Integrators*, Acta Numerica (2001), [doi:10.1017/S096249290100006X](https://doi.org/10.1017/S096249290100006X).
+
 Some methods may not be interfaced yet; it is accessible through:
 
 ```python
@@ -1763,12 +1792,16 @@ The type of integrator used to integrate the solution of the optimal control pro
 - SCIPY_LSODA: The scipy integrator LSODA
 
 ### Enum: QuadratureRule
-The type of integration used to integrate the cost function terms of Lagrange:
+The type of integration used to integrate the cost function terms of Lagrange. `VariationalBiorbdModel` also uses
+compatible rules to approximate its discrete Lagrangian, but this is independent of objective-term integration:
 - RECTANGLE_LEFT: The integral is approximated by a left rectangle rule (Left Riemann sum).
 - RECTANGLE_RIGHT: The integral is approximated by a right rectangle rule (Right Riemann sum).
 - MIDPOINT: The integral is approximated by a midpoint rectangle rule (Midpoint Riemann sum).
 - APPROXIMATE_TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the beginning of the next interval.
 - TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the end of the current interval.
+- GAUSS_LEGENDRE_2: In `VariationalBiorbdModel(discrete_approximation=...)`, the two-point Gauss--Legendre rule
+  evaluates the discrete action on the affine configuration segment. It is currently an action-quadrature rule, not
+  an `integration_rule` for Lagrange objective terms or a control-force approximation.
 
 ### Enum: SoftContactDynamics
 The type of transcription of any dynamics (e.g., rigidbody_dynamics or soft_contact_dynamics):

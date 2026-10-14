@@ -1,4 +1,6 @@
 from copy import deepcopy
+from dataclasses import dataclass
+from enum import Enum
 from math import inf
 from typing import Callable
 from time import perf_counter
@@ -13,12 +15,50 @@ from ..dynamics.ode_solvers import OdeSolver
 from ..limits.constraints import ConstraintFcn, ConstraintList
 from ..limits.objective_functions import ObjectiveFcn, ObjectiveList
 from ..limits.path_conditions import InitialGuessList
-from ..misc.enums import SolverType, InterpolationType, MultiCyclicCycleSolutions, ControlType, OnlineOptim
+from ..misc.enums import (
+    SolverType,
+    InterpolationType,
+    MultiCyclicCycleSolutions,
+    ControlType,
+    OnlineOptim,
+)
 from ..interfaces import Solver
 from ..interfaces.abstract_options import GenericSolver
 from ..models.protocols.biomodel import BioModel
 from ..optimization.solution.solution_data import SolutionMerge
 from ..optimization.parameters import ParameterList
+
+
+class RecedingHorizonFailurePolicy(Enum):
+    """Behavior to adopt when a receding-horizon window does not converge."""
+
+    STOP = "stop"
+    CONTINUE_DIAGNOSTIC = "continue_diagnostic"
+
+
+@dataclass(frozen=True)
+class RecedingHorizonWindowResult:
+    """Outcome of one receding-horizon solve, independently of trajectory export."""
+
+    solution: Solution
+    solver_succeeded: bool
+    trajectory_available: bool
+    physically_acceptable: bool
+    exported: bool
+
+    @property
+    def accepted(self) -> bool:
+        return self.solver_succeeded or self.physically_acceptable
+
+
+@dataclass(frozen=True)
+class CyclicVariableShift:
+    """Add ``turns * period`` to selected state rows when a cyclic window advances."""
+
+    key: str
+    indices: int | tuple[int, ...] | list[int]
+    period: float
+    turns: int = 1
 
 
 class RecedingHorizonOptimization(OptimalControlProgram):
@@ -95,6 +135,10 @@ class RecedingHorizonOptimization(OptimalControlProgram):
         max_consecutive_failing: int = inf,
         update_function_extra_params: dict = None,
         get_all_iterations: bool = False,
+        failure_policy: RecedingHorizonFailurePolicy | str = RecedingHorizonFailurePolicy.CONTINUE_DIAGNOSTIC,
+        window_evaluation_function: Callable | None = None,
+        before_window_solve: Callable | None = None,
+        after_window_solve: Callable | None = None,
         **advance_options,
     ) -> Solution | tuple:
         """
@@ -127,6 +171,18 @@ class RecedingHorizonOptimization(OptimalControlProgram):
             Any parameters to pass to the update function
         get_all_iterations: bool
             If an extra output value that includes all the individual solution should be returned
+        failure_policy: RecedingHorizonFailurePolicy | str
+            Stop immediately on a solver failure or continue collecting diagnostics. Failed windows are never
+            exported or used to advance the horizon unless ``window_evaluation_function`` accepts them.
+        window_evaluation_function: Callable | None
+            Optional callback ``(rhe, window_index, solution) -> bool`` declaring a numerically failed window
+            physically acceptable. This does not change ``solver_succeeded`` or the solver status.
+        before_window_solve: Callable | None
+            Optional callback ``(rhe, window_index, previous_solution)`` called immediately before each solve.
+            Returning ``False`` stops before solving the window.
+        after_window_solve: Callable | None
+            Optional callback ``(rhe, window_index, window_result)`` called after each solve and export decision.
+            Returning ``False`` prevents the next window from being solved.
         advance_options: Any
             The extra options to pass to the advancing methods
 
@@ -137,6 +193,9 @@ class RecedingHorizonOptimization(OptimalControlProgram):
 
         if len(self.nlp) != 1:
             raise NotImplementedError("MHE is only available for 1 phase program")
+
+        if isinstance(failure_policy, str):
+            failure_policy = RecedingHorizonFailurePolicy(failure_policy)
 
         sol = None
         states = []
@@ -156,6 +215,8 @@ class RecedingHorizonOptimization(OptimalControlProgram):
         real_time = perf_counter()
         all_solutions = []
         split_solutions = []
+        window_results = []
+        last_exported_solution = None
         consecutive_failing = 0
         update_function_extra_params = {} if update_function_extra_params is None else update_function_extra_params
 
@@ -164,11 +225,31 @@ class RecedingHorizonOptimization(OptimalControlProgram):
             update_function(self, self.total_optimization_run, sol, **update_function_extra_params)
             and consecutive_failing < max_consecutive_failing
         ):
+            if before_window_solve is not None and before_window_solve(self, self.total_optimization_run, sol) is False:
+                break
             sol = super(RecedingHorizonOptimization, self).solve(
                 solver=solver_current,
                 warm_start=warm_start,
             )
             consecutive_failing = 0 if sol.status == 0 else consecutive_failing + 1
+
+            solver_succeeded = sol.status == 0
+            trajectory_available = sol.vector is not None
+            physically_acceptable = bool(
+                not solver_succeeded
+                and window_evaluation_function is not None
+                and window_evaluation_function(self, self.total_optimization_run, sol)
+            )
+            export_window = trajectory_available and (solver_succeeded or physically_acceptable)
+            window_results.append(
+                RecedingHorizonWindowResult(
+                    solution=sol,
+                    solver_succeeded=solver_succeeded,
+                    trajectory_available=trajectory_available,
+                    physically_acceptable=physically_acceptable,
+                    exported=export_window,
+                )
+            )
 
             # Set the option for the next iteration
             if self.total_optimization_run == 0:
@@ -189,26 +270,57 @@ class RecedingHorizonOptimization(OptimalControlProgram):
                 real_time = perf_counter()  # Reset timer to skip the compiling time (so skip the first call to solve)
 
             # Solve and save the current window of interest
-            _states, _controls, _parameters = self.export_data(sol)
-            states.append(_states)
-            controls.append(_controls)
-            parameters.append(_parameters)
+            if export_window:
+                _states, _controls, _parameters = self.export_data(sol)
+                states.append(_states)
+                controls.append(_controls)
+                parameters.append(_parameters)
+                last_exported_solution = sol
             # Solve and save the full window of the OCP
             if get_all_iterations:
                 all_solutions.append(sol)
             # Update the initial frame bounds and initial guess
-            self.advance_window(sol, **advance_options)
+            if export_window:
+                self.advance_window(sol, **advance_options)
 
             self.total_optimization_run += 1
 
-        states.append({key: sol.decision_states()[key][-1] for key in sol.decision_states().keys()})
+            if (
+                after_window_solve is not None
+                and after_window_solve(self, self.total_optimization_run - 1, window_results[-1]) is False
+            ):
+                break
+            if not solver_succeeded and failure_policy == RecedingHorizonFailurePolicy.STOP:
+                break
+
+        if sol is None:
+            raise RuntimeError("No receding-horizon window was solved")
+
+        if not states:
+            sol.window_results = window_results
+            return (sol, all_solutions, split_solutions) if get_all_iterations else sol
+
+        states.append(
+            {
+                key: last_exported_solution.decision_states()[key][-1]
+                for key in last_exported_solution.decision_states().keys()
+            }
+        )
         real_time = perf_counter() - real_time
 
         # Prepare the modified ocp that fits the solution dimension
-        dt = sol.t_span()[0][-1]
+        dt = last_exported_solution.t_span()[0][-1]
+        attempted_windows = self.total_optimization_run
+        self.total_optimization_run = len(controls)
         final_sol = self._initialize_solution(float(dt), states, controls, parameters)
+        self.total_optimization_run = attempted_windows
         final_sol.solver_time_to_optimize = total_time
         final_sol.real_time_to_optimize = real_time
+        final_sol.status = next(
+            (result.solution.status for result in window_results if not result.solver_succeeded),
+            0,
+        )
+        final_sol.window_results = window_results
 
         return (final_sol, all_solutions, split_solutions) if get_all_iterations else final_sol
 
@@ -324,7 +436,10 @@ class RecedingHorizonOptimization(OptimalControlProgram):
             if self.nlp[0].x_init[key].type != InterpolationType.EACH_FRAME:
                 # Override the previous x_init
                 self.nlp[0].x_init.add(
-                    key, np.ndarray(states[key].shape), interpolation=InterpolationType.EACH_FRAME, phase=0
+                    key,
+                    np.ndarray(states[key].shape),
+                    interpolation=InterpolationType.EACH_FRAME,
+                    phase=0,
                 )
                 self.nlp[0].x_init[key].check_and_adjust_dimensions(len(self.nlp[0].states[key]), self.nlp[0].ns)
 
@@ -358,7 +473,12 @@ class RecedingHorizonOptimization(OptimalControlProgram):
         parameters = sol.parameters
         for key in parameters.keys():
             # Override the previous param_init
-            self.parameter_init.add(key, parameters[key][:, None], interpolation=InterpolationType.CONSTANT, phase=0)
+            self.parameter_init.add(
+                key,
+                parameters[key][:, None],
+                interpolation=InterpolationType.CONSTANT,
+                phase=0,
+            )
         return True
 
     def export_data(self, sol) -> tuple:
@@ -382,7 +502,10 @@ class RecedingHorizonOptimization(OptimalControlProgram):
 
         frames = self.frame_to_export
         if frames.stop is not None and frames.stop == self.nlp[0].n_controls_nodes:
-            if self.nlp[0].control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+            if self.nlp[0].control_type in (
+                ControlType.CONSTANT,
+                ControlType.CONSTANT_WITH_LAST_NODE,
+            ):
                 frames = slice(frames.start, frames.stop - 1)
         for key in self.nlp[0].controls.keys():
             controls[key] = merged_controls[key][:, frames]
@@ -390,7 +513,10 @@ class RecedingHorizonOptimization(OptimalControlProgram):
         return states, controls, parameters
 
     def _define_time(
-        self, phase_time: int | float | list | tuple, objective_functions: ObjectiveList, constraints: ConstraintList
+        self,
+        phase_time: int | float | list | tuple,
+        objective_functions: ObjectiveList,
+        constraints: ConstraintList,
     ):
         """
         Declare the phase_time vector in v. If objective_functions or constraints defined a time optimization,
@@ -467,6 +593,7 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
         if not cyclic_options:
             cyclic_options = {}
         self._initialize_state_idx_to_cycle(cyclic_options)
+        self._initialize_cyclic_variable_shifts(cyclic_options)
 
         self._set_cyclic_bound()
         if solver.type == SolverType.IPOPT:
@@ -490,7 +617,10 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
         if frames.stop is not None and frames.stop != self.nlp[0].n_controls_nodes:
             # The "not" conditions are there because if they are true, super() already avec done it.
             # Otherwise since it is cyclic it should always be done anyway
-            if self.nlp[0].control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+            if self.nlp[0].control_type in (
+                ControlType.CONSTANT,
+                ControlType.CONSTANT_WITH_LAST_NODE,
+            ):
                 frames = slice(self.frame_to_export.start, self.frame_to_export.stop - 1)
 
             for key in self.nlp[0].controls.keys():
@@ -503,7 +633,10 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
         for key in self.nlp[0].states.keys():
             x_init.add(
                 key,
-                np.concatenate([state[key][:, :-1] for state in states] + [states[-1][key][:, -1:]], axis=1),
+                np.concatenate(
+                    [state[key][:, :-1] for state in states] + [states[-1][key][:, -1:]],
+                    axis=1,
+                ),
                 interpolation=InterpolationType.EACH_FRAME,
                 phase=0,
             )
@@ -553,6 +686,29 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
         states = self.nlp[0].states
         self.state_idx_to_cycle = {key: range(len(states[key])) for key in options["states"]}
 
+    def _initialize_cyclic_variable_shifts(self, options):
+        self.cyclic_variable_shifts = []
+        for shift in options.get("variable_shifts", []):
+            if isinstance(shift, dict):
+                shift = CyclicVariableShift(**shift)
+            if not isinstance(shift, CyclicVariableShift):
+                raise TypeError("Each cyclic variable shift must be a CyclicVariableShift or a compatible dictionary")
+            if shift.key not in self.nlp[0].states:
+                raise KeyError(f"Cyclic state '{shift.key}' is not defined")
+            indices = (shift.indices,) if isinstance(shift.indices, int) else tuple(shift.indices)
+            if any(index < 0 or index >= len(self.nlp[0].states[shift.key]) for index in indices):
+                raise IndexError(f"A cyclic index for state '{shift.key}' is out of range")
+            self.cyclic_variable_shifts.append(
+                CyclicVariableShift(shift.key, indices, float(shift.period), int(shift.turns))
+            )
+
+    def _apply_cyclic_variable_shifts(self, key: str, values: np.ndarray) -> np.ndarray:
+        shifted = np.asarray(values).copy()
+        for shift in self.cyclic_variable_shifts:
+            if shift.key == key:
+                shifted[list(shift.indices), ...] += shift.turns * shift.period
+        return shifted
+
     def _set_cyclic_bound(self, sol: Solution = None):
         if self.nlp[0].x_bounds.type != InterpolationType.CONSTANT_WITH_FIRST_AND_LAST_DIFFERENT:
             raise ValueError(
@@ -574,8 +730,9 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
             else:
                 t = self.time_idx_to_cycle * self.nb_intermediate_frames
                 states = sol.decision_states(to_merge=SolutionMerge.NODES)
-                self.nlp[0].x_bounds[key].min[s, 2] = states[key][s, t] - range_of_motion * 0.01
-                self.nlp[0].x_bounds[key].max[s, 2] = states[key][s, t] + range_of_motion * 0.01
+                terminal_state = self._apply_cyclic_variable_shifts(key, states[key][:, t])
+                self.nlp[0].x_bounds[key].min[s, 2] = terminal_state[s] - range_of_motion * 0.01
+                self.nlp[0].x_bounds[key].max[s, 2] = terminal_state[s] + range_of_motion * 0.01
 
     def advance_window(self, sol: Solution, steps: int = 0, **advance_options):
         super(CyclicRecedingHorizonOptimization, self).advance_window(sol, steps, **advance_options)
@@ -587,7 +744,8 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
 
         # Update the initial frame bounds
         for key in states.keys():
-            self.nlp[0].x_bounds[key][:, 0] = states[key][:, self.time_idx_to_cycle * self.nb_intermediate_frames]
+            initial_state = states[key][:, self.time_idx_to_cycle * self.nb_intermediate_frames]
+            self.nlp[0].x_bounds[key][:, 0] = self._apply_cyclic_variable_shifts(key, initial_state)
         self._set_cyclic_bound(sol)
         return True
 
@@ -597,11 +755,14 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
         for key in states.keys():
             if self.nlp[0].x_init[key].type != InterpolationType.EACH_FRAME:
                 self.nlp[0].x_init.add(
-                    key, np.ndarray(states[key].shape), interpolation=InterpolationType.EACH_FRAME, phase=0
+                    key,
+                    np.ndarray(states[key].shape),
+                    interpolation=InterpolationType.EACH_FRAME,
+                    phase=0,
                 )
                 self.nlp[0].x_init[key].check_and_adjust_dimensions(len(self.nlp[0].states[key]), self.nlp[0].ns)
 
-            self.nlp[0].x_init[key].init[:, :] = states[key]
+            self.nlp[0].x_init[key].init[:, :] = self._apply_cyclic_variable_shifts(key, states[key])
         return True
 
     def advance_window_initial_guess_controls(self, sol, **advance_options):
@@ -658,7 +819,12 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         self.initial_guess_frames = []
         for _ in range(self.n_cycles):
             self.initial_guess_frames.extend(
-                list(range(self.n_cycles_to_advance * self.cycle_len, (self.n_cycles_to_advance + 1) * self.cycle_len))
+                list(
+                    range(
+                        self.n_cycles_to_advance * self.cycle_len,
+                        (self.n_cycles_to_advance + 1) * self.cycle_len,
+                    )
+                )
             )
         self.initial_guess_frames.append((self.n_cycles_to_advance + 1) * self.cycle_len)
 
@@ -680,28 +846,33 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                 if self.nlp[0].x_init[key].type != InterpolationType.ALL_POINTS:
                     self.nlp[0].x_init.add(
                         key,
-                        np.ndarray((states[key].shape[0], self.nlp[0].ns * self.nb_intermediate_frames + 1)),
+                        np.ndarray(
+                            (
+                                states[key].shape[0],
+                                self.nlp[0].ns * self.nb_intermediate_frames + 1,
+                            )
+                        ),
                         interpolation=InterpolationType.ALL_POINTS,
                         phase=0,
                     )
                     self.nlp[0].x_init[key].check_and_adjust_dimensions(
-                        self.nlp[0].states[key].shape, self.nlp[0].ns * self.nb_intermediate_frames
+                        self.nlp[0].states[key].shape,
+                        self.nlp[0].ns * self.nb_intermediate_frames,
                     )
-                else:
-                    initial_guess_frames = []
-                    for _ in range(self.n_cycles):
-                        initial_guess_frames.extend(
-                            list(
-                                range(
-                                    self.n_cycles_to_advance * self.cycle_len * self.nb_intermediate_frames,
-                                    (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames,
-                                )
+                initial_guess_frames = []
+                for _ in range(self.n_cycles):
+                    initial_guess_frames.extend(
+                        list(
+                            range(
+                                self.n_cycles_to_advance * self.cycle_len * self.nb_intermediate_frames,
+                                (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames,
                             )
                         )
-                    initial_guess_frames.append(
-                        (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames
                     )
-                    self.nlp[0].x_init[key].init[:, :] = states[key][:, initial_guess_frames]
+                initial_guess_frames.append(
+                    (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames
+                )
+                self.nlp[0].x_init[key].init[:, :] = states[key][:, initial_guess_frames]
             else:
                 if self.nlp[0].x_init[key].type != InterpolationType.EACH_FRAME:
                     self.nlp[0].x_init.add(
@@ -711,8 +882,7 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                         phase=0,
                     )
                     self.nlp[0].x_init[key].check_and_adjust_dimensions(self.nlp[0].states[key].shape, self.nlp[0].ns)
-                else:
-                    self.nlp[0].x_init[key].init[:, :] = states[key][:, self.initial_guess_frames]
+                self.nlp[0].x_init[key].init[:, :] = states[key][:, self.initial_guess_frames]
 
     def advance_window_initial_guess_controls(self, sol, **advance_options):
         controls = sol.decision_controls(to_merge=SolutionMerge.NODES)
@@ -731,7 +901,10 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                     self.nlp[0].controls[key].shape, self.nlp[0].n_controls_nodes - 1
                 )
 
-            if self.nlp[0].control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+            if self.nlp[0].control_type in (
+                ControlType.CONSTANT,
+                ControlType.CONSTANT_WITH_LAST_NODE,
+            ):
                 frames = self.initial_guess_frames[:-1]
             elif self.nlp[0].control_type == ControlType.LINEAR_CONTINUOUS:
                 frames = self.initial_guess_frames
@@ -778,7 +951,10 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
             final_solution.append(solution[1])
 
         cycle_solutions_output = []
-        if cycle_solutions in (MultiCyclicCycleSolutions.FIRST_CYCLES, MultiCyclicCycleSolutions.ALL_CYCLES):
+        if cycle_solutions in (
+            MultiCyclicCycleSolutions.FIRST_CYCLES,
+            MultiCyclicCycleSolutions.ALL_CYCLES,
+        ):
             for sol in solution[1]:
                 _states, _controls, _parameters = self.export_cycles(sol)
                 dt = float(sol.t_span()[0][-1])
@@ -790,7 +966,10 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                 dt = float(sol.t_span()[0][-1])
                 cycle_solutions_output.append(self._initialize_one_cycle(dt, _states, _controls, _parameters))
 
-        if cycle_solutions in (MultiCyclicCycleSolutions.FIRST_CYCLES, MultiCyclicCycleSolutions.ALL_CYCLES):
+        if cycle_solutions in (
+            MultiCyclicCycleSolutions.FIRST_CYCLES,
+            MultiCyclicCycleSolutions.ALL_CYCLES,
+        ):
             final_solution.append(cycle_solutions_output)
 
         return tuple(final_solution) if len(final_solution) > 1 else final_solution[0]
@@ -812,7 +991,10 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         for key in self.nlp[0].states.keys():
             states[key] = decision_states[key][:, window_slice]
 
-        if self.nlp[0].control_type in (ControlType.CONSTANT, ControlType.CONSTANT_WITH_LAST_NODE):
+        if self.nlp[0].control_type in (
+            ControlType.CONSTANT,
+            ControlType.CONSTANT_WITH_LAST_NODE,
+        ):
             window_slice = slice(cycle_number * self.cycle_len, (cycle_number + 1) * self.cycle_len)
         for key in self.nlp[0].controls.keys():
             controls[key] = decision_controls[key][:, window_slice]
@@ -827,7 +1009,10 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         for key in self.nlp[0].states.keys():
             x_init.add(
                 key,
-                np.concatenate([state[key][:, :-1] for state in states] + [states[-1][key][:, -1:]], axis=1),
+                np.concatenate(
+                    [state[key][:, :-1] for state in states] + [states[-1][key][:, -1:]],
+                    axis=1,
+                ),
                 interpolation=self.nlp[0].x_init.type,
                 phase=0,
             )
@@ -869,7 +1054,13 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         a_init = InitialGuessList()
         return Solution.from_initial_guess(solution_ocp, [np.array([dt]), x_init, u_init, p_init, a_init])
 
-    def _initialize_one_cycle(self, dt: float, states: np.ndarray, controls: np.ndarray, parameters: np.ndarray):
+    def _initialize_one_cycle(
+        self,
+        dt: float,
+        states: np.ndarray,
+        controls: np.ndarray,
+        parameters: np.ndarray,
+    ):
         """return a solution for a single window kept of the MHE"""
         x_init = InitialGuessList()
         for key in self.nlp[0].states.keys():

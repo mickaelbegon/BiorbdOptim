@@ -2,6 +2,8 @@
 Biorbd model for holonomic constraints and variational integrator.
 """
 
+from math import sqrt
+
 import biorbd_casadi as biorbd
 from casadi import SX, MX, DM, vertcat, jacobian, transpose
 
@@ -67,6 +69,12 @@ class VariationalBiorbdModel(HolonomicBiorbdModel):
         Returns
         -------
         The discrete Lagrangian.
+
+        Notes
+        -----
+        ``QuadratureRule.GAUSS_LEGENDRE_2`` evaluates the Lagrangian at the
+        two Gauss--Legendre nodes of the affine segment joining ``q1`` and
+        ``q2``.
         """
         if self.discrete_approximation == QuadratureRule.MIDPOINT:
             q_discrete = (q1 + q2) / 2
@@ -85,6 +93,14 @@ class VariationalBiorbdModel(HolonomicBiorbdModel):
             # Technol., Pasadena, CA, 2004. p 13
             qdot_discrete = (q2 - q1) / time_step
             return time_step / 2 * (self.lagrangian()(q1, qdot_discrete) + self.lagrangian()(q2, qdot_discrete))
+        elif self.discrete_approximation == QuadratureRule.GAUSS_LEGENDRE_2:
+            qdot_discrete = (q2 - q1) / time_step
+            gauss_legendre_offset = sqrt(3) / 6
+            q_minus = (1 / 2 + gauss_legendre_offset) * q1 + (1 / 2 - gauss_legendre_offset) * q2
+            q_plus = (1 / 2 - gauss_legendre_offset) * q1 + (1 / 2 + gauss_legendre_offset) * q2
+            return (
+                time_step / 2 * (self.lagrangian()(q_minus, qdot_discrete) + self.lagrangian()(q_plus, qdot_discrete))
+            )
         else:
             raise NotImplementedError(f"Discrete Lagrangian {self.discrete_approximation} is not implemented")
 
