@@ -2,7 +2,6 @@ import numpy as np
 from casadi import Function, jacobian, hessian, sum1
 from matplotlib import pyplot as plt
 import matplotlib.colors as mcolors
-import matplotlib.cm as mcm
 from ..interfaces.ipopt_interface import IpoptInterface
 
 
@@ -116,7 +115,7 @@ def evaluate_hessian_objective(v, ocp):
 
 def create_conditioning_plots(ocp):
 
-    cmap = mcm.get_cmap("seismic")
+    cmap = plt.get_cmap("seismic")
     cmap.set_bad(color="k")
     interface = IpoptInterface(ocp)
     variables_vector = ocp.variables_vector
@@ -129,7 +128,7 @@ def create_conditioning_plots(ocp):
     objectives_hess_func = hessian_objective(variables_vector, all_objectives)
 
     # PLOT CONSTRAINTS
-    fig_constraints, axis_constraints = plt.subplots(1, 2, num="Check conditioning for constraints")
+    fig_constraints, axis_constraints = plt.subplots(1, 2, num="Check conditioning for constraints", clear=True)
 
     # Jacobian plot
     fake_jacobian = np.zeros((nb_constraints, nb_variables))
@@ -162,7 +161,7 @@ def create_conditioning_plots(ocp):
         pass
 
     # PLOT OBJECTIVES
-    fig_obj, axis_obj = plt.subplots(1, 1, num="Check conditioning for objectives")
+    fig_obj, axis_obj = plt.subplots(1, 1, num="Check conditioning for objectives", clear=True)
 
     # Hessian objective plot
     fake_hessian_obj = np.zeros((nb_variables, nb_variables))
@@ -231,7 +230,7 @@ def update_objective_plot(v, ocp):
     hessian_matrix, condition_number, convexity = evaluate_hessian_objective(v, ocp)
     axis_obj = ocp.conditioning_plots["axis_obj"]
     im_objectives_hessian = ocp.conditioning_plots["im_objectives_hessian"]
-    cmap = mcm.get_cmap("seismic")
+    cmap = plt.get_cmap("seismic")
 
     # Hessian objective plot
     hess_min = np.min(hessian_matrix) if hessian_matrix.shape[0] != 0 else 0
