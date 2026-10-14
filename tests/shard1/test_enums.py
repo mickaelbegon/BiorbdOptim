@@ -33,9 +33,10 @@ def test_solver_type():
     assert SolverType.ACADOS.value == "ACADOS"
     assert SolverType.SQP.value == "SqpMethod"
     assert SolverType.NONE.value == None
+    assert SolverType.MADNLP.value == "madnlp"
 
     # verify the number of elements
-    assert len(SolverType) == 4
+    assert len(SolverType) == 5
 
 
 def test_node():
