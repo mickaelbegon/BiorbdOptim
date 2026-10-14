@@ -788,14 +788,15 @@ One can refer to their respective solver's documentation to know which options e
 The `show_online_optim` parameter can be set to `True` so the graphs nicely update during the optimization with the default values.
 One can also directly declare `online_optim` as an `OnlineOptim` parameter to customize the behavior of the plotter. 
 Note that `show_online_optim` and `online_optim` are mutually exclusive.
-Please also note that `OnlineOptim.MULTIPROCESS` is not available on Windows and only none of them are available on Macos. 
-To see how to run the server on Windows, please refer to the `getting_started/pendulum.py` example.
+Please also note that `OnlineOptim.MULTIPROCESS` is not available on Windows or Macos.
+On Macos, the default backend is `OnlineOptim.MULTIPROCESS_SERVER`, while `OnlineOptim.SERVER` remains available if one wants to start `resources/plotting_server.py` manually.
+To see how to run the server explicitly, please refer to the `resources/plotting_server.py` example.
 It is expected to slow down the optimization a bit. 
 `show_options` can be also passed as a dict to the plotter to customize the plotter's behavior.
 If `online_optim` is set to `SERVER`, then a server must be started manually by instantiating an `PlottingServer` class (see `ressources/plotting_server.py`).
 The following keys are additional options when using `OnlineOptim.SERVER` and `OnlineOptim.MULTIPROCESS_SERVER`:
   - `host`: the host to use (default is `localhost`)
-  - `port`: the port to use (default is `5030`)
+  - `port`: the port to use (default is `5030` for `OnlineOptim.SERVER` and a random available port for `OnlineOptim.MULTIPROCESS_SERVER`)
 
 If you want to see IPOPT's iterations over the course of the resolution of your opc, it is possible using the following:
 ```python    
@@ -1266,8 +1267,13 @@ The objective functions are soft penalties of the optimization program.
 In other words, the solution tries to minimize the value as much as possible but will not complain if the objective remains high.
 The objective functions come in two formats: Lagrange and Mayer. 
 
-The Lagrange objective functions are integrated over the whole phase (actually over the selected nodes, usually Node.ALL). 
-One should note that integration is not given by the dynamics function but by the rectangle approximation over a node.
+The Lagrange objective functions are integrated over the whole phase (actually over the selected nodes, usually Node.ALL).
+By default, bioptim uses a left-rectangle approximation at each shooting node. For direct multiple shooting with
+RK1, RK2, or RK4, `integration_rule=QuadratureRule.INTEGRATOR` instead evaluates the objective at the internal
+Runge--Kutta stages with their matching Butcher weights. For a direct-collocation phase,
+`integration_rule=QuadratureRule.COLLOCATION` evaluates the objective at the collocation stages and uses the matching
+collocation weights. For both rules, targets remain specified at shooting nodes and are linearly interpolated to the
+stages.
 
 The Mayer objective functions are values at a single node, usually the Node.LAST. 
 
@@ -1720,7 +1726,7 @@ The type of online plotter to use.
 
 The accepted values are:
 NONE: No online plotter.
-DEFAULT: Use the default online plotter depending on the OS (MULTIPROCESS on Linux, MULTIPROCESS_SERVER on Windows and NONE on MacOS).
+DEFAULT: Use the default online plotter depending on the OS (MULTIPROCESS on Linux, MULTIPROCESS_SERVER on Windows and macOS).
 MULTIPROCESS: The online plotter is in a separate process.
 SERVER: The online plotter is in a separate server.
 MULTIPROCESS_SERVER: The online plotter using the server automatically setup on a separate process.
@@ -1774,6 +1780,8 @@ The type of integration used to integrate the cost function terms of Lagrange:
 - MIDPOINT: The integral is approximated by a midpoint rectangle rule (Midpoint Riemann sum).
 - APPROXIMATE_TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the beginning of the next interval.
 - TRAPEZOIDAL: The integral is approximated by a trapezoidal rule using the state at the end of the current interval.
+- INTEGRATOR: For direct multiple shooting with RK1, RK2, or RK4, the integral uses the corresponding internal Runge--Kutta stages and Butcher weights. Targets are linearly interpolated from shooting nodes to stages.
+- COLLOCATION: For a direct-collocation ODE solver, the integral uses that solver's collocation stages and weights. Targets are linearly interpolated from shooting nodes to stages.
 
 ### Enum: DefectType
 - QDOT_EQUALS_SLOPE: The slope of the COLLOCATION polynomial must be equal to the qdot.
@@ -2005,6 +2013,9 @@ available in the `biorbd` documentation.
 
 ### The [example_optimal_time.py](./bioptim/examples/getting_started/example_optimal_time.py) file
 Examples of time optimization can be found in 'examples/optimal_time_ocp/'.
+
+### The [example_pinocchio.py](./bioptim/examples/getting_started/example_pinocchio.py) file
+This example is the exact same as the pendulum example, but with a model defined using the `Pinocchio` backend (instead of the `biorbd` backend). It is designed to show how to use a model defined in Pinocchio instead of biorbd.
 
 ### The [example_simulation.py](./bioptim/examples/getting_started/example_simulation.py) file
 The first part of this example is a single shooting simulation from initial guesses.
