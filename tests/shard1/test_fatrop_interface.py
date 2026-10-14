@@ -43,9 +43,7 @@ def _prepare_scaled_multiphase_pendulum():
     u_scaling = VariableScalingList()
 
     for phase, model in enumerate(models):
-        dynamics.add(
-            DynamicsOptions(ode_solver=OdeSolver.RK4(), phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE)
-        )
+        dynamics.add(DynamicsOptions(ode_solver=OdeSolver.RK4(), phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE))
         x_bounds.add("q", bounds=model.bounds_from_ranges("q"), phase=phase)
         x_bounds.add("qdot", bounds=model.bounds_from_ranges("qdot"), phase=phase)
         u_bounds.add("tau", min_bound=[-1000] * model.nb_tau, max_bound=[1000] * model.nb_tau, phase=phase)
@@ -115,9 +113,7 @@ def test_fatrop_normalizes_scaled_state_continuity(ode_solver):
         test_point = np.array(ocp.init_vector)
         test_point[1:] += np.random.default_rng(42).normal(scale=0.01, size=test_point[1:].shape)
 
-        fatrop_values = np.array(Function("fatrop_g", [variables], [fatrop_constraints])(test_point))[
-            :rows_per_node, 0
-        ]
+        fatrop_values = np.array(Function("fatrop_g", [variables], [fatrop_constraints])(test_point))[:rows_per_node, 0]
         ipopt_values = np.array(Function("ipopt_g", [variables], [ipopt_constraints])(test_point))[:rows_per_node, 0]
         npt.assert_allclose(fatrop_values * constraint_scaling, ipopt_values, atol=1e-10)
 

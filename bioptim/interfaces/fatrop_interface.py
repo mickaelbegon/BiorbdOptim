@@ -64,8 +64,7 @@ class FatropInterface(SolverInterface):
 
         if ocp.vector_layout.ordering == OrderingStrategy.VARIABLE_MAJOR:
             raise ValueError(
-                "FATROP requires OrderingStrategy.TIME_MAJOR so decision variables follow "
-                "[x_0, u_0, x_1, u_1, ...]."
+                "FATROP requires OrderingStrategy.TIME_MAJOR so decision variables follow " "[x_0, u_0, x_1, u_1, ...]."
             )
 
         self.options_common = {}
