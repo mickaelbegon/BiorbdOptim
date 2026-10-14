@@ -31,7 +31,6 @@ from bioptim.optimization.non_linear_program import NonLinearProgram as NLP
 from bioptim.optimization.optimization_variable import OptimizationVariableList
 from tests.utils import TestUtils
 
-
 N_SHOOTING = 10
 EXTERNAL_FORCE_ARRAY = np.zeros((9, N_SHOOTING))
 EXTERNAL_FORCE_ARRAY[:, 0] = [
@@ -1386,11 +1385,9 @@ def test_penalty_custom_fail(penalty_origin, value, phase_dynamics):
             "weight",
         ]
         for keyword in keywords:
-            exec(
-                f"""def custom_with_keyword(ocp, nlp, t, x, u, p, {keyword}):
+            exec(f"""def custom_with_keyword(ocp, nlp, t, x, u, p, {keyword}):
                             my_values = DM.zeros((12, 1)) + x[index]
-                            return my_values"""
-            )
+                            return my_values""")
             exec("""penalty.custom_function = custom_with_keyword""")
             exec(f"""penalty_type(penalty, ocp, ocp.nlp[0], [], x, [], [], {keyword}=0)""")
 

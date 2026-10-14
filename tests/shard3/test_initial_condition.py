@@ -22,7 +22,6 @@ from bioptim import (
 from bioptim.limits.path_conditions import InitialGuess
 from ..utils import TestUtils
 
-
 # TODO: Add negative test for sizes
 
 

@@ -6,7 +6,6 @@ import numpy as np
 from bioptim import InterpolationType, PhaseDynamics, Solver, ControlType, OdeSolver, BiorbdModel
 from ..utils import TestUtils
 
-
 if platform.system() != "Linux":
     pytest.skip("Skipping tests on non-Linux platforms", allow_module_level=True)
 
