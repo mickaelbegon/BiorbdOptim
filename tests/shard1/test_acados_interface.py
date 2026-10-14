@@ -4,11 +4,12 @@ It tests the results of an optimal control problem with acados regarding the pro
 - the handling of mayer and lagrange obj
 """
 
+import importlib.util
 import os
 import shutil
 from sys import platform
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, call, patch
 
 import numpy as np
 import numpy.testing as npt
@@ -40,7 +41,22 @@ def _physical_state_control_constraint_with_scaling(controller):
 
 
 def test_acados_v055_diagnostics_snapshot():
-    from bioptim.interfaces.acados_interface import _collect_acados_diagnostics
+    # Only the backend imports are fake; execute the actual collector in an isolated module.
+    status_to_str = Mock(side_effect=["ACADOS_QP_FAILURE", "ACADOS_SUCCESS"])
+    with patch.dict(
+        "sys.modules",
+        {
+            "acados_template": SimpleNamespace(AcadosModel=object, AcadosOcp=object, AcadosOcpSolver=object),
+            "acados_template.utils": SimpleNamespace(status_to_str=status_to_str),
+        },
+    ):
+        spec = importlib.util.spec_from_file_location(
+            "bioptim.interfaces._acados_diagnostics_test",
+            TestUtils.bioptim_folder() + "/interfaces/acados_interface.py",
+        )
+        acados_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acados_module)
+    _collect_acados_diagnostics = acados_module._collect_acados_diagnostics
 
     statistics = np.array(
         [
@@ -112,6 +128,8 @@ def test_acados_v055_diagnostics_snapshot():
     npt.assert_equal(feasible_qp_diagnostics["qp_iterations_per_solve"], [[2, 4, 6], [3, 5, 7]])
     npt.assert_equal(feasible_qp_diagnostics["qp_iterations"], [12, 15])
     npt.assert_equal(feasible_qp_diagnostics["step_sizes"], [1.0, 0.5])
+    assert feasible_qp_diagnostics["status_label"] == "ACADOS_SUCCESS"
+    assert status_to_str.call_args_list == [call(4), call(0)]
 
 
 def test_acados_initialize_solver_builds_native_capsule_without_solving(monkeypatch):
@@ -161,18 +179,10 @@ def test_acados_initialize_solver_builds_native_capsule_without_solving(monkeypa
         solver_options=SimpleNamespace(),
         code_gen_options=SimpleNamespace(json_file="generated/acados_ocp.json"),
     )
-    interface._AcadosInterface__set_costs = lambda ocp: events.append(
-        ("costs", ocp)
-    )
-    interface._AcadosInterface__set_constraints = lambda ocp: events.append(
-        ("constraints", ocp)
-    )
-    interface._AcadosInterface__update_solver = lambda: events.append(
-        ("update", interface.ocp_solver)
-    )
-    interface._AcadosInterface__restore_solver_state = lambda: events.append(
-        ("restore", interface.ocp_solver)
-    )
+    interface._AcadosInterface__set_costs = lambda ocp: events.append(("costs", ocp))
+    interface._AcadosInterface__set_constraints = lambda ocp: events.append(("constraints", ocp))
+    interface._AcadosInterface__update_solver = lambda: events.append(("update", interface.ocp_solver))
+    interface._AcadosInterface__restore_solver_state = lambda: events.append(("restore", interface.ocp_solver))
     interface.get_optimized_value = lambda: {"status": "solved"}
 
     returned_solver = interface.initialize_solver()
@@ -1315,24 +1325,14 @@ def test_acados_update_solver_sets_terminal_guess_in_scaled_units():
         y_ref_end=[],
         x_bound_min=np.zeros((2, 3)),
         x_bound_max=np.zeros((2, 3)),
-        start_g_bounds=SimpleNamespace(
-            min=np.empty((0, 1)), max=np.empty((0, 1))
-        ),
-        all_g_bounds=SimpleNamespace(
-            min=np.empty((0, 1)), max=np.empty((0, 1))
-        ),
-        end_g_bounds=SimpleNamespace(
-            min=np.empty((0, 1)), max=np.empty((0, 1))
-        ),
+        start_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
+        all_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
+        end_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
     )
 
     AcadosInterface._AcadosInterface__update_solver(interface)
 
-    state_sets = {
-        node: value
-        for node, field, value in fake_solver.set_calls
-        if field == "x"
-    }
+    state_sets = {node: value for node, field, value in fake_solver.set_calls if field == "x"}
     npt.assert_allclose(state_sets[0], [1.0, 2.0], rtol=0, atol=0)
     npt.assert_allclose(state_sets[1], [3.0, 5.0], rtol=0, atol=0)
 

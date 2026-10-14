@@ -65,8 +65,7 @@ class FatropInterface(SolverInterface):
 
         if ocp.vector_layout.ordering == OrderingStrategy.VARIABLE_MAJOR:
             raise ValueError(
-                "FATROP requires OrderingStrategy.TIME_MAJOR so decision variables follow "
-                "[x_0, u_0, x_1, u_1, ...]."
+                "FATROP requires OrderingStrategy.TIME_MAJOR so decision variables follow " "[x_0, u_0, x_1, u_1, ...]."
             )
 
         self.options_common = {}
@@ -139,23 +138,15 @@ class FatropInterface(SolverInterface):
         tightened_upper = upper.copy()
         finite_lower = interval & np.isfinite(lower)
         finite_upper = interval & np.isfinite(upper)
-        tightened_lower[finite_lower] += factor * np.maximum(
-            1.0, np.abs(lower[finite_lower])
-        )
-        tightened_upper[finite_upper] -= factor * np.maximum(
-            1.0, np.abs(upper[finite_upper])
-        )
+        tightened_lower[finite_lower] += factor * np.maximum(1.0, np.abs(lower[finite_lower]))
+        tightened_upper[finite_upper] -= factor * np.maximum(1.0, np.abs(upper[finite_upper]))
         if np.any(tightened_lower > tightened_upper):
-            raise ValueError(
-                "Fatrop bound tightening exceeds at least one decision interval."
-            )
+            raise ValueError("Fatrop bound tightening exceeds at least one decision interval.")
 
         call_limits = dict(self.limits)
         call_limits["lbx"] = DM(tightened_lower)
         call_limits["ubx"] = DM(tightened_upper)
-        call_limits["x0"] = DM(
-            np.minimum(np.maximum(initial, tightened_lower), tightened_upper)
-        )
+        call_limits["x0"] = DM(np.minimum(np.maximum(initial, tightened_lower), tightened_upper))
         return call_limits
 
     def set_lagrange_multiplier(self, sol: Solution) -> None:

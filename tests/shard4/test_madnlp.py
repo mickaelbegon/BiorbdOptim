@@ -51,13 +51,9 @@ def test_madnlp_compiled_casadi_plugin(tmp_path, monkeypatch):
     options.set_maximum_iterations(100)
     options.set_print_level("ERROR")
     options.set_c_compile(True)
-    solver_options = options.as_dict(
-        type("I", (), {"options_common": {}})()
-    )
+    solver_options = options.as_dict(type("I", (), {"options_common": {}})())
 
-    cas.nlpsol("madnlp_codegen", "madnlp", nlp, solver_options).generate_dependencies(
-        "madnlp_nlp.c"
-    )
+    cas.nlpsol("madnlp_codegen", "madnlp", nlp, solver_options).generate_dependencies("madnlp_nlp.c")
     solver = cas.nlpsol(
         "madnlp_compiled",
         "madnlp",

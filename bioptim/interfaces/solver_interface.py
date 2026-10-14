@@ -78,10 +78,7 @@ class SolverInterface:
         self._next_initial_guess_override = None
         expected = np.asarray(default_values).size
         if candidate.size != expected:
-            raise ValueError(
-                "The one-shot NLP initial guess has "
-                f"{candidate.size} values; expected {expected}."
-            )
+            raise ValueError("The one-shot NLP initial guess has " f"{candidate.size} values; expected {expected}.")
         return candidate
 
     def enable_initial_nlp_audit(self, enabled: Bool = True) -> None:

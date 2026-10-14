@@ -9,7 +9,6 @@ import pytest
 from bioptim import Solver
 from bioptim.interfaces.function_transform import TRANSFORM_PASSES, transformed_nlpsol
 
-
 HAS_TRANSFORM = hasattr(ca.Function, "transform")
 OPTIONS = {"ipopt.print_level": 0, "print_time": False, "ipopt.tol": 1e-10}
 

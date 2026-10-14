@@ -14,7 +14,6 @@ import pytest
 from bioptim import Solver
 from bioptim.interfaces.c_compile_cache import cached_nlpsol
 
-
 OPTIONS = {"ipopt.print_level": 0, "print_time": False, "ipopt.tol": 1e-10}
 LIMITS = {"x0": [0.8, 0.8], "lbg": 1, "ubg": 1}
 
@@ -76,7 +75,9 @@ result = solver(x0=[0.8, 0.8], lbg=1, ubg=1)
 print(json.dumps({'info': info, 'x': result['x'].full().ravel().tolist(), 'iterations': solver.stats()['iter_count']}))
 """
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2]) + os.pathsep + environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = (
+        str(Path(__file__).resolve().parents[2]) + os.pathsep + environment.get("PYTHONPATH", "")
+    )
     environment["OPENBLAS_NUM_THREADS"] = "1"
     environment["OMP_NUM_THREADS"] = "1"
     process = subprocess.run(

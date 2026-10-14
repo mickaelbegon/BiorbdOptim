@@ -80,9 +80,7 @@ def test_initial_nlp_audit_uses_exact_shaked_collocation_graph_and_caches_functi
     second_audit = interface.initial_nlp_audits[-1]
 
     submitted_limits = fake_nlpsol[0].call_limits[0]
-    exact_g = Function("test_exact_initial_g", [interface.nlp["x"]], [interface.nlp["g"]])(
-        submitted_limits["x0"]
-    )
+    exact_g = Function("test_exact_initial_g", [interface.nlp["x"]], [interface.nlp["g"]])(submitted_limits["x0"])
     constraint_violations = _direct_bound_violation(
         exact_g,
         submitted_limits["lbg"],
