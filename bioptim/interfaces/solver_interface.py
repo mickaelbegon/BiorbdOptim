@@ -1,4 +1,4 @@
-from ..misc.parameters_types import Bool, AnyDict, AnyListorDict
+from ..misc.parameters_types import Bool, AnyDict, AnyListorDict, CX
 
 
 class SolverInterface:
@@ -109,6 +109,15 @@ class SolverInterface:
         """
 
         raise RuntimeError("SolverInterface is an abstract class")
+
+    def transform_penalty_value(self, penalty, nlp, value: CX) -> CX:
+        """
+        Transform a penalty value before it is dispatched to the solver.
+
+        Solver interfaces may override this hook when their canonical problem
+        representation requires an equivalent constraint formulation.
+        """
+        return value
 
     def start_get_iterations(self):
         """
