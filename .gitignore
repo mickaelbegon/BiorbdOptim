@@ -150,3 +150,4 @@ sandbox/
 !/tests/shard6/sol_controls.npy
 !/tests/shard6/sol_states.npy
 !/tests/shard6/sol_states_dot.npy
+benchmarks/results/

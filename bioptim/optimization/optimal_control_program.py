@@ -1415,7 +1415,7 @@ class OptimalControlProgram:
             self.set_warm_start(sol=warm_start)
 
         if self._is_warm_starting:
-            if solver.type == SolverType.IPOPT:
+            if solver.type in (SolverType.IPOPT, SolverType.MADNLP):
                 solver.set_warm_start_options(1e-10)
 
         self.ocp_solver.opts = solver
@@ -1450,6 +1450,11 @@ class OptimalControlProgram:
             from ..interfaces.fatrop_interface import FatropInterface
 
             ocp_solver = FatropInterface(self)
+
+        elif solver.type == SolverType.MADNLP:
+            from ..interfaces.madnlp_interface import MadnlpInterface
+
+            ocp_solver = MadnlpInterface(self)
 
         elif solver.type == SolverType.SQP:
             from ..interfaces.sqp_interface import SQPInterface

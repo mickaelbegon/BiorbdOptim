@@ -25,6 +25,7 @@ class SolverType(Enum):
 
     IPOPT = "Ipopt"
     FATROP = "Fatrop"
+    MADNLP = "madnlp"
     ACADOS = "ACADOS"
     SQP = "SqpMethod"
     NONE = None
@@ -102,7 +103,7 @@ class OnlineOptim(Enum):
     Attributes
     ----------
     NONE: No online plotting
-    DEFAULT: Default online plotting (MULTIPROCESS on Linux, MULTIPROCESS_SERVER on Windows and NONE on MacOS)
+    DEFAULT: Default online plotting (MULTIPROCESS on Linux and MULTIPROCESS_SERVER on Windows and macOS)
     MULTIPROCESS: Multiprocess online plotting
     SERVER: Server online plotting
     MULTIPROCESS_SERVER: Multiprocess server online plotting
@@ -117,9 +118,7 @@ class OnlineOptim(Enum):
         if self != OnlineOptim.DEFAULT:
             return self
 
-        if platform.system() == "Linux":
-            return OnlineOptim.MULTIPROCESS
-        elif platform.system() == "Windows":
+        if platform.system() in ("Linux", "Windows", "Darwin"):
             return OnlineOptim.MULTIPROCESS_SERVER
         else:
             return None

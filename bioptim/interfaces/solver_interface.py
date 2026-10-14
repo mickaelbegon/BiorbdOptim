@@ -1,4 +1,6 @@
-from ..misc.parameters_types import Bool, AnyDict, AnyListorDict
+import numpy as np
+
+from ..misc.parameters_types import Bool, AnyDict, AnyListorDict, CX
 
 
 class SolverInterface:
@@ -48,6 +50,41 @@ class SolverInterface:
         self.pre_shake_tree_constraints = None
         self.shaked_constraints = None
         self.shaked_ocp_solver = None
+
+        # Optional, solver-neutral diagnostics of the exact canonical NLP
+        # submitted to CasADi.  Keeping this disabled by default is important:
+        # ordinary solves must not build or evaluate an additional CasADi
+        # function.  Interfaces are long-lived during receding-horizon solves,
+        # so the evaluator is cached when the audit is explicitly enabled.
+        self.initial_nlp_audit_enabled = False
+        self.initial_nlp_audits = []
+        self._initial_nlp_constraint_audit_function = None
+        self._next_initial_guess_override = None
+
+    def set_next_initial_guess_override(self, values) -> None:
+        """Submit an exact, scaled decision vector to the next solve only."""
+
+        candidate = np.asarray(values, dtype=float).reshape(-1, 1)
+        if candidate.size == 0 or not np.all(np.isfinite(candidate)):
+            raise ValueError("The one-shot NLP initial guess must be finite and non-empty.")
+        self._next_initial_guess_override = candidate.copy()
+
+    def consume_initial_guess_override(self, default_values):
+        """Return and clear a one-shot scaled decision-vector override."""
+
+        if self._next_initial_guess_override is None:
+            return default_values
+        candidate = self._next_initial_guess_override
+        self._next_initial_guess_override = None
+        expected = np.asarray(default_values).size
+        if candidate.size != expected:
+            raise ValueError("The one-shot NLP initial guess has " f"{candidate.size} values; expected {expected}.")
+        return candidate
+
+    def enable_initial_nlp_audit(self, enabled: Bool = True) -> None:
+        """Enable exact pre-solve evaluations of the submitted ``g(x0)``."""
+
+        self.initial_nlp_audit_enabled = enabled
 
     def configure(self, **options):
         """
@@ -109,6 +146,15 @@ class SolverInterface:
         """
 
         raise RuntimeError("SolverInterface is an abstract class")
+
+    def transform_penalty_value(self, penalty, nlp, value: CX) -> CX:
+        """
+        Transform a penalty value before it is dispatched to the solver.
+
+        Solver interfaces may override this hook when their canonical problem
+        representation requires an equivalent constraint formulation.
+        """
+        return value
 
     def start_get_iterations(self):
         """

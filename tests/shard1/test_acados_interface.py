@@ -4,13 +4,17 @@ It tests the results of an optimal control problem with acados regarding the pro
 - the handling of mayer and lagrange obj
 """
 
+import importlib.util
 import os
 import shutil
 from sys import platform
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 import numpy as np
 import numpy.testing as npt
 import pytest
+from casadi import Function, vertcat
 
 from bioptim import (
     TorqueBiorbdModel,
@@ -30,6 +34,492 @@ from bioptim import (
     SolutionMerge,
 )
 from tests.utils import TestUtils
+
+
+def physical_state_control_constraint_with_scaling(controller):
+    return controller.states["q"].cx[1] + controller.controls["tau"].cx[0]
+
+
+def test_acados_v055_diagnostics_snapshot():
+    # Only the backend imports are fake; execute the actual collector in an isolated module.
+    status_to_str = Mock(side_effect=["ACADOS_QP_FAILURE", "ACADOS_SUCCESS"])
+    with patch.dict(
+        "sys.modules",
+        {
+            "acados_template": SimpleNamespace(AcadosModel=object, AcadosOcp=object, AcadosOcpSolver=object),
+            "acados_template.utils": SimpleNamespace(status_to_str=status_to_str),
+        },
+    ):
+        spec = importlib.util.spec_from_file_location(
+            "bioptim.interfaces._acados_diagnostics_test",
+            TestUtils.bioptim_folder() + "/interfaces/acados_interface.py",
+        )
+        acados_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acados_module)
+    _collect_acados_diagnostics = acados_module._collect_acados_diagnostics
+
+    statistics = np.array(
+        [
+            [0.0, 1.0],
+            [1e-1, 1e-6],
+            [2e-1, 2e-6],
+            [3e-1, 3e-6],
+            [4e-1, 4e-6],
+            [0.0, 0.0],
+            [2.0, 1.0],
+            [0.0, 0.75],
+        ]
+    )
+
+    class FakeAcadosSolver:
+        def __init__(self, statistics_table=statistics):
+            self.statistics_table = statistics_table
+
+        def get_stats(self, field):
+            values = {
+                "statistics": self.statistics_table,
+                "nlp_iter": 1,
+                "sqp_iter": 1,
+                "qpscaling_status": 0,
+                "time_tot": 0.12,
+                "time_qp": 0.03,
+            }
+            if field not in values:
+                raise ValueError(f"{field} unavailable")
+            return values[field]
+
+        def get_residuals(self, recompute=False):
+            assert recompute is False
+            return np.array([1e-6, 2e-6, 3e-6, 4e-6])
+
+    diagnostics = _collect_acados_diagnostics(
+        FakeAcadosSolver(),
+        status=4,
+        nlp_solver_type="SQP",
+        qp_solver="PARTIAL_CONDENSING_HPIPM",
+    )
+
+    assert diagnostics["status_label"] == "ACADOS_QP_FAILURE"
+    assert diagnostics["successful"] is False
+    assert diagnostics["residuals"] == {
+        "stationarity": 1e-6,
+        "dynamics": 2e-6,
+        "inequality": 3e-6,
+        "complementarity": 4e-6,
+    }
+    npt.assert_equal(diagnostics["qp_status"], [0.0, 0.0])
+    npt.assert_equal(diagnostics["qp_iterations"], [2.0, 1.0])
+    npt.assert_equal(diagnostics["step_sizes"], [0.0, 0.75])
+    assert diagnostics["timings"]["time_tot"] == 0.12
+    assert diagnostics["timings"]["time_qp"] == 0.03
+    assert "time_sim" in diagnostics["unavailable_statistics"]
+
+    feasible_qp_statistics = np.zeros((14, 2))
+    feasible_qp_statistics[[5, 7, 9], :] = [[0, 0], [1, 0], [0, 2]]
+    feasible_qp_statistics[[6, 8, 10], :] = [[2, 3], [4, 5], [6, 7]]
+    feasible_qp_statistics[11, :] = [1.0, 0.5]
+    feasible_qp_diagnostics = _collect_acados_diagnostics(
+        FakeAcadosSolver(feasible_qp_statistics),
+        status=0,
+        nlp_solver_type="SQP_WITH_FEASIBLE_QP",
+        qp_solver="PARTIAL_CONDENSING_HPIPM",
+    )
+    npt.assert_equal(feasible_qp_diagnostics["qp_status"], [[0, 1, 0], [0, 0, 2]])
+    npt.assert_equal(feasible_qp_diagnostics["qp_iterations_per_solve"], [[2, 4, 6], [3, 5, 7]])
+    npt.assert_equal(feasible_qp_diagnostics["qp_iterations"], [12, 15])
+    npt.assert_equal(feasible_qp_diagnostics["step_sizes"], [1.0, 0.5])
+    assert feasible_qp_diagnostics["status_label"] == "ACADOS_SUCCESS"
+    assert status_to_str.call_args_list == [call(4), call(0)]
+
+
+def test_acados_initialize_solver_builds_native_capsule_without_solving(monkeypatch):
+    pytest.importorskip("acados_template")
+    import bioptim.interfaces.acados_interface as acados_module
+
+    events = []
+
+    class FakeNativeSolver:
+        def __init__(self):
+            self.solve_calls = 0
+
+        def solve(self):
+            self.solve_calls += 1
+            return 0
+
+    native_solver = FakeNativeSolver()
+
+    def fake_constructor(*_args, **kwargs):
+        events.append(("construct", kwargs))
+        return native_solver
+
+    monkeypatch.setattr(acados_module, "AcadosOcpSolver", fake_constructor)
+
+    class FakeOptions:
+        check_reuse_possible = False
+        c_compile = True
+        tol_code_reuse = 1e-12
+        only_first_options_has_changed = False
+        reset_solver_before_solve = False
+        has_tolerance_changed = False
+
+        def as_dict(self, _interface):
+            return {"nlp_solver_max_iter": 12}
+
+        def set_only_first_options_has_changed(self, value):
+            events.append(("only_first_options", value))
+
+        def set_has_tolerance_changed(self, value):
+            events.append(("tolerance_changed", value))
+
+    interface = object.__new__(acados_module.AcadosInterface)
+    interface.ocp = object()
+    interface.opts = FakeOptions()
+    interface.ocp_solver = None
+    interface.acados_ocp = SimpleNamespace(
+        solver_options=SimpleNamespace(),
+        code_gen_options=SimpleNamespace(json_file="generated/acados_ocp.json"),
+    )
+    interface._AcadosInterface__set_costs = lambda ocp: events.append(("costs", ocp))
+    interface._AcadosInterface__set_constraints = lambda ocp: events.append(("constraints", ocp))
+    interface._AcadosInterface__update_solver = lambda: events.append(("update", interface.ocp_solver))
+    interface._AcadosInterface__restore_solver_state = lambda: events.append(("restore", interface.ocp_solver))
+    interface.get_optimized_value = lambda: {"status": "solved"}
+
+    returned_solver = interface.initialize_solver()
+
+    assert returned_solver is native_solver
+    assert interface.ocp_solver is native_solver
+    assert native_solver.solve_calls == 0
+    assert interface.acados_ocp.solver_options.nlp_solver_max_iter == 12
+    assert [event[0] for event in events] == [
+        "costs",
+        "constraints",
+        "construct",
+        "only_first_options",
+        "tolerance_changed",
+        "update",
+        "restore",
+    ]
+    assert events[2][1] == {
+        "json_file": "generated/acados_ocp.json",
+        "build": True,
+        "generate": True,
+        "check_reuse_possible": False,
+        "tol_code_reuse": 1e-12,
+    }
+
+    result = interface.solve()
+
+    assert result == {"status": "solved"}
+    assert native_solver.solve_calls == 1
+    assert sum(event[0] == "construct" for event in events) == 1
+
+
+def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
+    pytest.importorskip("acados_template")
+    from acados_template import AcadosOcp
+
+    from bioptim.interfaces.acados_interface import _configure_acados_codegen
+
+    monkeypatch.setenv("ACADOS_SOURCE_DIR", str(tmp_path / "source"))
+    acados_root = tmp_path / "installed_acados"
+    generated_code = tmp_path / "generated_code"
+
+    solver = Solver.ACADOS()
+    solver.set_acados_dir(str(acados_root))
+    solver.set_c_generated_code_path(str(generated_code))
+
+    acados_ocp = AcadosOcp()
+    _configure_acados_codegen(acados_ocp, solver)
+
+    assert acados_ocp.code_gen_options.acados_include_path == str(acados_root / "include")
+    assert acados_ocp.code_gen_options.acados_lib_path == str(acados_root / "lib")
+    assert acados_ocp.code_gen_options.code_export_directory == str(generated_code)
+    assert acados_ocp.code_gen_options.json_file == str(generated_code / "acados_ocp.json")
+
+
+def test_acados_v055_runtime_parameter_updates(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim import OptimalControlProgram
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    model = TorqueBiorbdModel(bioptim_folder + "/examples/models/cube_acados.bioMod")
+    n_shooting = 5
+    runtime_data = np.arange(4 * (n_shooting + 1), dtype=float).reshape((2, 2, n_shooting + 1))
+    dynamics = DynamicsOptions(
+        ode_solver=OdeSolver.RK4(),
+        expand_dynamics=True,
+        numerical_data_timeseries={"runtime_data": runtime_data},
+    )
+
+    x_bounds = BoundsList()
+    x_bounds["q"] = model.bounds_from_ranges("q")
+    x_bounds["qdot"] = model.bounds_from_ranges("qdot")
+    u_bounds = BoundsList()
+    u_bounds["tau"] = [-100] * model.nb_tau, [100] * model.nb_tau
+    ocp = OptimalControlProgram(
+        model,
+        n_shooting,
+        1,
+        dynamics=dynamics,
+        x_bounds=x_bounds,
+        u_bounds=u_bounds,
+        use_sx=True,
+    )
+
+    solver = Solver.ACADOS()
+    first_solution = ocp.solve(solver)
+    assert first_solution.status == 0
+    acados_solver = ocp.ocp_solver.ocp_solver
+    expected_runtime_data = np.vstack((runtime_data[:, 0, :], runtime_data[:, 1, :]))
+    for stage in range(n_shooting + 1):
+        npt.assert_equal(acados_solver.get(stage, "p"), expected_runtime_data[:, stage])
+
+    ocp.nlp[0].numerical_data_timeseries["runtime_data"][1, 0, 2] = 42.0
+    ocp.nlp[0].numerical_data_timeseries["runtime_data"][0, 1, 4] = -3.0
+    with patch.object(acados_solver, "set_params_sparse", wraps=acados_solver.set_params_sparse) as sparse_update:
+        second_solution = ocp.solve(solver)
+
+    assert second_solution.status == 0
+    assert sparse_update.call_count == 2
+    npt.assert_equal(acados_solver.get(2, "p"), [2.0, 42.0, 8.0, 20.0])
+    npt.assert_equal(acados_solver.get(4, "p"), [4.0, 16.0, -3.0, 22.0])
+
+
+def test_acados_v055_runtime_parameter_values_do_not_invalidate_code_reuse(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim import OptimalControlProgram
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    generated_code = tmp_path / "runtime_parameter_reuse"
+    n_shooting = 5
+
+    def solve_with_runtime_data(runtime_data):
+        model = TorqueBiorbdModel(bioptim_folder + "/examples/models/cube_acados.bioMod")
+        dynamics = DynamicsOptions(
+            ode_solver=OdeSolver.RK4(),
+            expand_dynamics=True,
+            numerical_data_timeseries={"runtime_data": runtime_data},
+        )
+        x_bounds = BoundsList()
+        x_bounds["q"] = model.bounds_from_ranges("q")
+        x_bounds["qdot"] = model.bounds_from_ranges("qdot")
+        u_bounds = BoundsList()
+        u_bounds["tau"] = [-100] * model.nb_tau, [100] * model.nb_tau
+        ocp = OptimalControlProgram(
+            model,
+            n_shooting,
+            1,
+            dynamics=dynamics,
+            x_bounds=x_bounds,
+            u_bounds=u_bounds,
+            use_sx=True,
+        )
+        solver = Solver.ACADOS()
+        solver.set_acados_model_name("runtime_parameter_reuse")
+        solver.set_c_generated_code_path(str(generated_code))
+        solver.set_check_reuse_possible(True)
+        solution = ocp.solve(solver)
+        assert solution.status == 0
+        return ocp
+
+    first_data = np.zeros((2, 2, n_shooting + 1))
+    first_ocp = solve_with_runtime_data(first_data)
+    assert first_ocp.ocp_solver.ocp_solver.generated
+
+    second_data = np.arange(4 * (n_shooting + 1), dtype=float).reshape((2, 2, n_shooting + 1))
+    reused_ocp = solve_with_runtime_data(second_data)
+    assert not reused_ocp.ocp_solver.ocp_solver.generated
+
+    expected_runtime_data = np.vstack((second_data[:, 0, :], second_data[:, 1, :]))
+    for stage in range(n_shooting + 1):
+        npt.assert_equal(reused_ocp.ocp_solver.ocp_solver.get(stage, "p"), expected_runtime_data[:, stage])
+
+
+def test_acados_v055_primal_dual_warm_start(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=5,
+        tf=1,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+
+    first_solution = ocp.solve(solver=solver)
+    assert first_solution.status == 0
+    solver_state = first_solution.solver_state
+    assert solver_state["solver"] == "ACADOS"
+    assert solver_state["format_version"] == 1
+    assert solver_state["n_horizon"] == 5
+    assert set(solver_state["iterate"]) == {"x", "u", "pi", "lam", "sl", "su"}
+
+    acados_solver = ocp.ocp_solver.ocp_solver
+    expected_iterate = {field: values.copy() for field, values in solver_state["iterate"].items()}
+    for field, values in expected_iterate.items():
+        assert values.ndim == 1
+        assert values.shape[0] == acados_solver.get_dim_flat(field)
+        if values.size:
+            acados_solver.set_flat(field, np.zeros_like(values))
+
+    # The Solution owns detached arrays, not views into the mutable Acados capsule.
+    for field, values in expected_iterate.items():
+        npt.assert_equal(first_solution.solver_state["iterate"][field], values)
+
+    iterate_before_solve = {}
+    original_solve = acados_solver.solve
+
+    def solve_after_recording_iterate():
+        for field in expected_iterate:
+            iterate_before_solve[field] = acados_solver.get_flat(field)
+        return original_solve()
+
+    with patch.object(acados_solver, "solve", side_effect=solve_after_recording_iterate):
+        second_solution = ocp.solve(solver=solver, warm_start=first_solution)
+
+    assert second_solution.status == 0
+    for field, values in expected_iterate.items():
+        npt.assert_equal(iterate_before_solve[field], values)
+
+    copied_solution = first_solution.copy(skip_data=True)
+    assert copied_solution.solver_state is not first_solution.solver_state
+    for field, values in expected_iterate.items():
+        npt.assert_equal(copied_solution.solver_state["iterate"][field], values)
+
+
+def test_acados_v055_code_reuse_and_reset(tmp_path, monkeypatch):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    monkeypatch.chdir(tmp_path)
+    bioptim_folder = TestUtils.bioptim_folder()
+    generated_code = tmp_path / "generated_code"
+
+    def solve_ocp():
+        ocp = ocp_module.prepare_ocp(
+            biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+            n_shooting=10,
+            tf=2,
+            expand_dynamics=True,
+        )
+        solver = Solver.ACADOS()
+        solver.set_acados_model_name("bioptim_code_reuse")
+        solver.set_c_generated_code_path(str(generated_code))
+        solver.set_check_reuse_possible(True)
+        ocp.solve(solver=solver)
+        return ocp, solver
+
+    first_ocp, _ = solve_ocp()
+    assert first_ocp.ocp_solver.ocp_solver.generated
+
+    reused_ocp, reused_solver = solve_ocp()
+    assert not reused_ocp.ocp_solver.ocp_solver.generated
+
+    reused_solver.set_reset_solver_before_solve(True)
+    reset_method = reused_ocp.ocp_solver.ocp_solver.reset
+    with patch.object(reused_ocp.ocp_solver.ocp_solver, "reset", wraps=reset_method) as reset_mock:
+        reused_ocp.solve(solver=reused_solver)
+        reset_mock.assert_called_once_with()
+
+
+def test_acados_v055_code_reuse_requires_stable_model_name():
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=10,
+        tf=2,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+    solver.set_check_reuse_possible(True)
+
+    with pytest.raises(RuntimeError, match="code reuse requires a stable model name"):
+        ocp.solve(solver=solver)
+
+
+@pytest.mark.parametrize("solver_mode", ["ANDERSON", "SQP_WITH_FEASIBLE_QP"])
+def test_acados_v055_solver_modes(solver_mode):
+    if platform == "win32":
+        return
+
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/cube_acados.bioMod",
+        n_shooting=10,
+        tf=2,
+        expand_dynamics=True,
+    )
+    solver = Solver.ACADOS()
+
+    if solver_mode == "ANDERSON":
+        solver.set_with_anderson_acceleration(True)
+        solver.set_anderson_activation_threshold(10.0)
+    else:
+        solver.set_nlp_solver_type("SQP_WITH_FEASIBLE_QP")
+        solver.set_byrd_omojokon_slack_relaxation_factor(1.01)
+
+    sol = ocp.solve(solver=solver)
+    assert sol.status == 0
+    diagnostics = sol.solver_diagnostics
+    assert diagnostics["status"] == 0
+    assert diagnostics["status_label"] == "ACADOS_SUCCESS"
+    assert diagnostics["successful"] is True
+    assert diagnostics["nlp_solver_type"] == (
+        "SQP_WITH_FEASIBLE_QP" if solver_mode == "SQP_WITH_FEASIBLE_QP" else "SQP"
+    )
+    assert diagnostics["residuals"] is not None
+    assert set(diagnostics["residuals"]) == {
+        "stationarity",
+        "dynamics",
+        "inequality",
+        "complementarity",
+    }
+    assert diagnostics["sqp_iterations"] == sol.iterations
+    assert diagnostics["timings"]["time_tot"] == sol.solver_time_to_optimize
+    assert diagnostics["raw_statistics"].ndim == 2
+    if solver_mode == "SQP_WITH_FEASIBLE_QP":
+        assert diagnostics["qp_status"].ndim == 2
+        assert diagnostics["qp_iterations_per_solve"].shape[1] == 3
+
+    copied_solution = sol.copy(skip_data=True)
+    assert copied_solution.status == sol.status
+    assert copied_solution.solver_diagnostics is not diagnostics
+    npt.assert_equal(
+        copied_solution.solver_diagnostics["raw_statistics"],
+        diagnostics["raw_statistics"],
+    )
+
+    acados_options = ocp.ocp_solver.acados_ocp.solver_options
+    if solver_mode == "ANDERSON":
+        assert acados_options.with_anderson_acceleration is True
+        assert acados_options.anderson_activation_threshold == 10.0
+    else:
+        assert acados_options.nlp_solver_type == "SQP_WITH_FEASIBLE_QP"
+        assert acados_options.byrd_omojokon_slack_relaxation_factor == 1.01
+
+    os.remove("./c_generated_code/acados_ocp.json")
+    shutil.rmtree("./c_generated_code/")
 
 
 @pytest.mark.parametrize("cost_type", ["LINEAR_LS", "NONLINEAR_LS"])
@@ -52,7 +542,7 @@ def test_acados_no_obj(cost_type):
     sol = ocp.solve(solver=solver)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -85,7 +575,7 @@ def test_acados_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], 1.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -120,7 +610,7 @@ def test_acados_mayer_first_node(cost_type):
     npt.assert_almost_equal(q[0, 0], 0.999999948505021)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -157,7 +647,7 @@ def test_acados_several_mayer(cost_type):
     npt.assert_almost_equal(q[2, -1], 3.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -202,7 +692,7 @@ def test_acados_one_lagrange(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -250,7 +740,7 @@ def test_acados_one_lagrange_and_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze(), decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -289,7 +779,7 @@ def test_acados_control_lagrange_and_state_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], target.squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -324,7 +814,7 @@ def test_acados_options(cost_type):
         npt.assert_array_less(iter[i + 1], iter[i])
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -485,7 +975,7 @@ def test_acados_one_parameter():
     npt.assert_almost_equal(gravity[-1], -9.80995, decimal=4)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -562,7 +1052,7 @@ def test_acados_several_parameter():
     npt.assert_almost_equal(mass[0], 20, decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -661,6 +1151,191 @@ def test_acados_constraints_all():
     # initial and final controls
     npt.assert_almost_equal(tau[:, 0], np.array((0.04483914, 9.90739842, 2.24951691, 0.78496612)), decimal=6)
     npt.assert_almost_equal(tau[:, -1], np.array((0.15945561, 10.03978178, -2.36075327, 0.07267697)), decimal=6)
+
+
+@pytest.mark.parametrize("constraint_node", (Node.START, Node.ALL))
+def test_acados_constraints_use_scaled_penalty_inputs(tmp_path, constraint_node):
+    """
+    ACADOS' model variables are scaled decision variables. Nonlinear penalty
+    functions must receive those same scaled symbols, otherwise Bioptim unscales
+    them a second time and exports a different constraint.
+    """
+
+    pytest.importorskip("acados_template")
+    from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
+    from bioptim.interfaces.acados_interface import AcadosInterface
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=5,
+        final_time=0.1,
+        use_sx=True,
+    )
+    constraints = ConstraintList()
+    constraints.add(
+        physical_state_control_constraint_with_scaling,
+        node=constraint_node,
+        min_bound=-1e6,
+        max_bound=1e6,
+    )
+    ocp.update_constraints(constraints)
+
+    solver = Solver.ACADOS()
+    solver.set_c_generated_code_path(str(tmp_path / "scaled_constraint"))
+    interface = AcadosInterface(ocp, solver)
+    interface._AcadosInterface__set_constraints(ocp)
+
+    nlp = ocp.nlp[0]
+    penalty = next(constraint for constraint in nlp.g if constraint)
+    # Custom penalties declare both start and end state/control inputs.
+    expected_expression = penalty.function[0](
+        nlp.time_cx,
+        nlp.dt,
+        vertcat(nlp.states.scaled.cx_start, nlp.states.scaled.cx_start),
+        vertcat(nlp.controls.scaled.cx_start, nlp.controls.scaled.cx_start),
+        nlp.parameters.scaled.cx,
+        nlp.algebraic_states.scaled.cx_start,
+        nlp.numerical_timeseries.cx,
+    )
+    expected = Function(
+        "expected_scaled_constraint",
+        [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+        [expected_expression],
+    )
+    exported_expression = interface.start_constr if constraint_node == Node.START else interface.all_constr
+    exported = Function(
+        "exported_scaled_constraint",
+        [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+        [exported_expression],
+    )
+
+    scaled_x = np.array([0.25, -0.5, 0.1, -0.2])
+    scaled_u = np.array([0.02, 0.3])
+    numerical_parameters = np.zeros(interface.acados_model.p.shape[0])
+    exported_value = exported(scaled_x, scaled_u, numerical_parameters)
+    npt.assert_allclose(exported_value, 16.5, rtol=0, atol=1e-12)
+    npt.assert_allclose(
+        exported_value,
+        expected(scaled_x, scaled_u, numerical_parameters),
+        rtol=0,
+        atol=1e-12,
+    )
+    if constraint_node == Node.START:
+        initial_export = Function(
+            "initial_exported_scaled_constraint",
+            [interface.acados_model.x, interface.acados_model.u, interface.acados_model.p],
+            [interface.acados_model.con_h_expr_0],
+        )
+        npt.assert_allclose(
+            initial_export(scaled_x, scaled_u, numerical_parameters),
+            exported_value,
+            rtol=0,
+            atol=1e-12,
+        )
+        npt.assert_equal(interface.acados_ocp.constraints.lh_0, [-1e6])
+        npt.assert_equal(interface.acados_ocp.constraints.uh_0, [1e6])
+        assert interface.acados_model.con_h_expr.shape[0] == 0
+
+
+def test_acados_terminal_state_initial_guess_uses_scaled_units():
+    pytest.importorskip("acados_template")
+    from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
+    from bioptim.interfaces.acados_interface import _scaled_state_initial_guess
+
+    bioptim_folder = TestUtils.bioptim_folder()
+    ocp = ocp_module.prepare_ocp(
+        biorbd_model_path=bioptim_folder + "/examples/models/pendulum.bioMod",
+        n_shooting=5,
+        final_time=0.1,
+        use_sx=True,
+    )
+    nlp = ocp.nlp[0]
+    terminal_guess = _scaled_state_initial_guess(nlp, nlp.ns)
+
+    for key in nlp.states.keys():
+        index = nlp.states[key].index
+        physical_value = np.asarray(nlp.x_init[key].init.evaluate_at(nlp.ns), dtype=float).reshape(-1)
+        scaling = np.asarray(nlp.x_scaling[key].scaling[:, 0], dtype=float).reshape(-1)
+        npt.assert_allclose(terminal_guess[index], physical_value / scaling, rtol=0, atol=0)
+
+
+def test_acados_update_solver_sets_terminal_guess_in_scaled_units():
+    pytest.importorskip("acados_template")
+    from bioptim.interfaces.acados_interface import AcadosInterface
+
+    class Variables(dict):
+        def __init__(self, values, shape):
+            super().__init__(values)
+            self.shape = shape
+
+    class InitialGuess:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+
+        def check_and_adjust_dimensions(self, *_args):
+            pass
+
+        @property
+        def init(self):
+            values = self.values
+
+            class Evaluator:
+                def evaluate_at(self, node):
+                    return values[:, node]
+
+            return Evaluator()
+
+    class FakeSolver:
+        def __init__(self):
+            self.set_calls = []
+
+        def set(self, node, field, value):
+            self.set_calls.append((node, field, np.asarray(value, dtype=float).copy()))
+
+        def constraints_set(self, *_args):
+            pass
+
+    controls = Variables({}, shape=0)
+    nlp = SimpleNamespace(
+        ns=1,
+        states=Variables({"q": SimpleNamespace(index=[0, 1], shape=2)}, shape=2),
+        controls=controls,
+        parameters=Variables({}, shape=0),
+        x_init={"q": InitialGuess([[2.0, 6.0], [8.0, 20.0]])},
+        x_scaling={"q": SimpleNamespace(scaling=np.array([[2.0], [4.0]]))},
+        u_init={},
+        u_scaling={},
+        u_bounds={},
+    )
+    fake_solver = FakeSolver()
+    interface = SimpleNamespace(
+        _AcadosInterface__update_runtime_parameters=lambda: None,
+        ocp=SimpleNamespace(
+            nlp=[nlp],
+            parameter_init={},
+            parameters={},
+        ),
+        acados_ocp=SimpleNamespace(
+            solver_options=SimpleNamespace(N_horizon=1),
+            dims=SimpleNamespace(nu=0),
+        ),
+        ocp_solver=fake_solver,
+        y_ref_start=[],
+        y_ref=[],
+        y_ref_end=[],
+        x_bound_min=np.zeros((2, 3)),
+        x_bound_max=np.zeros((2, 3)),
+        start_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
+        all_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
+        end_g_bounds=SimpleNamespace(min=np.empty((0, 1)), max=np.empty((0, 1))),
+    )
+
+    AcadosInterface._AcadosInterface__update_solver(interface)
+
+    state_sets = {node: value for node, field, value in fake_solver.set_calls if field == "x"}
+    npt.assert_allclose(state_sets[0], [1.0, 2.0], rtol=0, atol=0)
+    npt.assert_allclose(state_sets[1], [3.0, 5.0], rtol=0, atol=0)
 
 
 def test_acados_constraints_end_all():
