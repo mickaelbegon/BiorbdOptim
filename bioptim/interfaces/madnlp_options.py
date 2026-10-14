@@ -15,7 +15,6 @@ from ..misc.parameters_types import (
     Str,
 )
 
-
 MADNLP_UNAVAILABLE = (
     "The CasADi MadNLP plugin is not available in the installed CasADi build. "
     "Install a CasADi distribution compiled with MadNLP support or follow the "
