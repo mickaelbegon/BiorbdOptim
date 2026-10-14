@@ -277,12 +277,11 @@ class Solution:
 
         dt, sol_states, sol_controls, sol_params, sol_algebraic_states = sol
 
-        vector = np.ndarray((0, 1))
-
         # For time
         if len(dt.shape) == 1:
             dt = dt[:, np.newaxis]
-        vector = np.concatenate((vector, dt))
+
+        state_vector = [dt]
 
         # For states
         for p, ss in enumerate(sol_states):
@@ -299,9 +298,8 @@ class Solution:
 
             for i in range(all_ns[p] * nb_intermediate_frames + 1):
                 for key in ss.keys():
-                    vector = np.concatenate(
-                        (vector, ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, np.newaxis])
-                    )
+                    state_vector.append(ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, None])
+        vector = np.vstack(state_vector)
 
         # For controls
         for p, ss in enumerate(sol_controls):
@@ -737,6 +735,25 @@ class Solution:
             new._decision_algebraic_states = deepcopy(self._decision_algebraic_states)
             new._parameters = deepcopy(self._parameters)
         return new
+
+    def to_initial_guesses(
+        self,
+        state_initial_guesses: InitialGuessList,
+        control_initial_guesses: InitialGuessList,
+        parameter_initial_guesses: InitialGuessList | None = None,
+        algebraic_state_initial_guesses: InitialGuessList | None = None,
+    ) -> tuple[InitialGuessList, InitialGuessList, InitialGuessList, InitialGuessList]:
+        """Adapt this solution's primal variables to new initial-guess grids."""
+
+        from .utils import adapt_solution_to_initial_guesses
+
+        return adapt_solution_to_initial_guesses(
+            self,
+            state_initial_guesses,
+            control_initial_guesses,
+            parameter_initial_guesses,
+            algebraic_state_initial_guesses,
+        )
 
     def _prepare_integrate(self, integrator: SolutionIntegrator) -> AnyTuple:
         """
