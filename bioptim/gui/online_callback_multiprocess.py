@@ -48,9 +48,7 @@ class OnlineCallbackMultiprocess(OnlineCallbackAbstract):
                 "serialized plotting process"
             )
 
-        dummy_phase_times = OptimizationVectorHelper.extract_step_times(
-            self.ocp, DM(np.ones(self.ocp.n_phases))
-        )
+        dummy_phase_times = OptimizationVectorHelper.extract_step_times(self.ocp, DM(np.ones(self.ocp.n_phases)))
         self._plotter = PlotOcp(
             self.ocp,
             only_initialize_variables=True,
@@ -62,15 +60,12 @@ class OnlineCallbackMultiprocess(OnlineCallbackAbstract):
         ocp_for_plotting.save_ipopt_iterations_info = None
         serialized_ocp = json.dumps(ocp_for_plotting.serialize()).encode()
         serialized_dummy_phase_times = [
-            [np.array(node_times)[:, 0].tolist() for node_times in phase_times]
-            for phase_times in dummy_phase_times
+            [np.array(node_times)[:, 0].tolist() for node_times in phase_times] for phase_times in dummy_phase_times
         ]
 
         self.queue = mp.Queue()
         self.plotter = self.ProcessPlotter(serialized_ocp, serialized_dummy_phase_times)
-        self.plot_process = mp.Process(
-            target=self.plotter, args=(self.queue, show_options), daemon=True
-        )
+        self.plot_process = mp.Process(target=self.plotter, args=(self.queue, show_options), daemon=True)
         self.plot_process.start()
 
     def close(self) -> None:
@@ -159,12 +154,9 @@ class OnlineCallbackMultiprocess(OnlineCallbackAbstract):
 
             ocp = OcpSerializable.deserialize(json.loads(self._serialized_ocp))
             dummy_phase_times = [
-                [DM(node_times) for node_times in phase_times]
-                for phase_times in self._dummy_phase_times
+                [DM(node_times) for node_times in phase_times] for phase_times in self._dummy_phase_times
             ]
-            self._plotter = PlotOcp(
-                ocp, dummy_phase_times=dummy_phase_times, **show_options
-            )
+            self._plotter = PlotOcp(ocp, dummy_phase_times=dummy_phase_times, **show_options)
 
         @property
         def has_at_least_one_active_figure(self) -> Bool:
@@ -176,9 +168,7 @@ class OnlineCallbackMultiprocess(OnlineCallbackAbstract):
             If at least one figure is active
             """
 
-            return [
-                plt.fignum_exists(fig.number) for fig in self._plotter.all_figures
-            ].count(True) > 0
+            return [plt.fignum_exists(fig.number) for fig in self._plotter.all_figures].count(True) > 0
 
         def plot_update(self) -> Bool:
             """

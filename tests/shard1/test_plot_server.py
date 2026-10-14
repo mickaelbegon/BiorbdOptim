@@ -56,9 +56,7 @@ def test_serialize_deserialize():
     # Prepare a set of data to serialize and deserialize
     ocp = _prepare_ocp()
 
-    dummy_phase_times = OptimizationVectorHelper.extract_step_times(
-        ocp, DM(np.ones(ocp.n_phases))
-    )
+    dummy_phase_times = OptimizationVectorHelper.extract_step_times(ocp, DM(np.ones(ocp.n_phases)))
     plotter = PlotOcp(
         ocp,
         dummy_phase_times=dummy_phase_times,
@@ -67,9 +65,7 @@ def test_serialize_deserialize():
     )
 
     np.random.seed(42)
-    xdata, ydata = plotter.parse_data(
-        **{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]}
-    )
+    xdata, ydata = plotter.parse_data(**{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]})
 
     # Serialize and deserialize the data
     serialized_data = _serialize_xydata(xdata, ydata)
@@ -84,26 +80,19 @@ def test_serialize_deserialize():
         if isinstance(y_variable, np.ndarray):
             assert np.allclose(y_variable, deserialized_y_variable[0], equal_nan=True)
         else:
-            for y_phase, deserialized_y_phase in zip(
-                y_variable, deserialized_y_variable
-            ):
+            for y_phase, deserialized_y_phase in zip(y_variable, deserialized_y_variable):
                 assert np.allclose(y_phase, deserialized_y_phase)
 
 
 def test_multiprocess_plotter_is_picklable_without_the_full_ocp():
     ocp = _prepare_ocp()
-    dummy_phase_times = OptimizationVectorHelper.extract_step_times(
-        ocp, DM(np.ones(ocp.n_phases))
-    )
+    dummy_phase_times = OptimizationVectorHelper.extract_step_times(ocp, DM(np.ones(ocp.n_phases)))
     serialized_dummy_phase_times = [
-        [np.array(node_times)[:, 0].tolist() for node_times in phase_times]
-        for phase_times in dummy_phase_times
+        [np.array(node_times)[:, 0].tolist() for node_times in phase_times] for phase_times in dummy_phase_times
     ]
     serialized_ocp = json.dumps(OcpSerializable.from_ocp(ocp).serialize()).encode()
 
-    process_plotter = OnlineCallbackMultiprocess.ProcessPlotter(
-        serialized_ocp, serialized_dummy_phase_times
-    )
+    process_plotter = OnlineCallbackMultiprocess.ProcessPlotter(serialized_ocp, serialized_dummy_phase_times)
     process_plotter = pickle.loads(ForkingPickler.dumps(process_plotter))
 
     assert process_plotter._serialized_ocp == serialized_ocp
@@ -121,27 +110,20 @@ def test_multiprocess_plotter_is_picklable_without_the_full_ocp():
 )
 def test_multiprocess_plotter_runs_with_forkserver():
     ocp = _prepare_ocp()
-    dummy_phase_times = OptimizationVectorHelper.extract_step_times(
-        ocp, DM(np.ones(ocp.n_phases))
-    )
+    dummy_phase_times = OptimizationVectorHelper.extract_step_times(ocp, DM(np.ones(ocp.n_phases)))
     parent_plotter = PlotOcp(
         ocp,
         dummy_phase_times=dummy_phase_times,
         only_initialize_variables=True,
     )
     np.random.seed(42)
-    xdata, ydata = parent_plotter.parse_data(
-        **{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]}
-    )
+    xdata, ydata = parent_plotter.parse_data(**{"x": np.random.rand(ocp.variables_vector.shape[0])[:, None]})
 
     serialized_dummy_phase_times = [
-        [np.array(node_times)[:, 0].tolist() for node_times in phase_times]
-        for phase_times in dummy_phase_times
+        [np.array(node_times)[:, 0].tolist() for node_times in phase_times] for phase_times in dummy_phase_times
     ]
     serialized_ocp = json.dumps(OcpSerializable.from_ocp(ocp).serialize()).encode()
-    process_plotter = OnlineCallbackMultiprocess.ProcessPlotter(
-        serialized_ocp, serialized_dummy_phase_times
-    )
+    process_plotter = OnlineCallbackMultiprocess.ProcessPlotter(serialized_ocp, serialized_dummy_phase_times)
 
     context = mp.get_context("forkserver")
     result_queue = context.Queue()
