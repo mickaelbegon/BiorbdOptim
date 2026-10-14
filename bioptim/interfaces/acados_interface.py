@@ -1,5 +1,6 @@
 from time import perf_counter
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 from scipy import linalg
@@ -19,6 +20,25 @@ from ..misc.parameters_types import (
     Bool,
     AnyListorDict,
 )
+
+
+def _configure_acados_codegen(acados_ocp: AcadosOcp, solver_options: Solver.ACADOS) -> None:
+    """Configure code generation with the Acados v0.5.5 API."""
+
+    if not hasattr(acados_ocp, "code_gen_options"):
+        raise RuntimeError(
+            "This version of bioptim requires Acados v0.5.5 or newer. "
+            "Please reinstall Acados using the scripts from bioptim/external."
+        )
+
+    code_gen_options = acados_ocp.code_gen_options
+    if solver_options.acados_dir:
+        acados_dir = Path(solver_options.acados_dir).expanduser().resolve()
+        code_gen_options.acados_include_path = str(acados_dir / "include")
+        code_gen_options.acados_lib_path = str(acados_dir / "lib")
+
+    code_gen_options.code_export_directory = solver_options.c_generated_code_path
+    code_gen_options.json_file = "acados_ocp.json"
 
 
 class AcadosInterface(SolverInterface):
@@ -115,8 +135,8 @@ class AcadosInterface(SolverInterface):
             solver_options = Solver.ACADOS()
         self.opts = solver_options
 
-        self.acados_ocp = AcadosOcp(acados_path=solver_options.acados_dir)
-        self.acados_ocp.code_export_directory = solver_options.c_generated_code_path
+        self.acados_ocp = AcadosOcp()
+        _configure_acados_codegen(self.acados_ocp, solver_options)
         self.acados_model = AcadosModel()
 
         self.__set_cost_type(solver_options.cost_type)
@@ -201,7 +221,12 @@ class AcadosInterface(SolverInterface):
         self.acados_model.con_h_expr_e = np.zeros((0, 0))
         self.acados_model.p = []
         if not self.opts.acados_model_name:
-            if self.opts.c_compile:
+            if self.opts.check_reuse_possible:
+                raise RuntimeError(
+                    "Acados code reuse requires a stable model name. "
+                    "Please call Solver.ACADOS.set_acados_model_name(...)."
+                )
+            elif self.opts.c_compile:
                 now = datetime.now()  # current date and time
                 self.acados_model.name = f"model_{now.strftime('%Y_%m_%d_%H%M%S%f')[:-4]}"
             else:
@@ -916,7 +941,14 @@ class AcadosInterface(SolverInterface):
         if self.ocp_solver is None:
             for key in options:
                 setattr(self.acados_ocp.solver_options, key, options[key])
-            self.ocp_solver = AcadosOcpSolver(self.acados_ocp, json_file="acados_ocp.json", build=self.opts.c_compile)
+            self.ocp_solver = AcadosOcpSolver(
+                self.acados_ocp,
+                json_file=self.acados_ocp.code_gen_options.json_file,
+                build=False if self.opts.check_reuse_possible else self.opts.c_compile,
+                generate=not self.opts.check_reuse_possible,
+                check_reuse_possible=self.opts.check_reuse_possible,
+                tol_code_reuse=self.opts.tol_code_reuse,
+            )
             self.opts.set_only_first_options_has_changed(False)
             self.opts.set_has_tolerance_changed(False)
 
@@ -926,6 +958,9 @@ class AcadosInterface(SolverInterface):
                     "Some options has been changed the second time acados was run.",
                     "Only " + str(Solver.ACADOS.get_tolerance_keys()) + " can be modified.",
                 )
+
+            if self.opts.reset_solver_before_solve:
+                self.ocp_solver.reset()
 
             if self.opts.has_tolerance_changed:
                 for key in self.opts.get_tolerance_keys():

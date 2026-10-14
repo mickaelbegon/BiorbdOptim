@@ -71,6 +71,12 @@ class ACADOS(GenericSolver):
         Directory of the generated code (default: "c_generated_code").
     _acados_model_name: str
         Name of the Acados model name used to build an existing c_generated library.
+    _check_reuse_possible: bool
+        If Acados should reuse compatible generated code and rebuild it otherwise.
+    _tol_code_reuse: float
+        Absolute tolerance used by Acados when comparing formulations for code reuse.
+    _reset_solver_before_solve: bool
+        If Acados should reset its iterates and QP memory before repeated solves.
     """
 
     type: SolverType = SolverType.ACADOS
@@ -95,6 +101,9 @@ class ACADOS(GenericSolver):
     _c_compile: Bool = True
     _c_generated_code_path: Str = "c_generated_code"
     _acados_model_name: StrOptional = None
+    _check_reuse_possible: Bool = False
+    _tol_code_reuse: Float = 1e-13
+    _reset_solver_before_solve: Bool = False
 
     @property
     def qp_solver(self) -> Str:
@@ -267,6 +276,9 @@ class ACADOS(GenericSolver):
             "_c_compile",
             "_c_generated_code_path",
             "_acados_model_name",
+            "_check_reuse_possible",
+            "_tol_code_reuse",
+            "_reset_solver_before_solve",
         }
 
         # Select the set of relevant keys before entering the loop
@@ -300,6 +312,18 @@ class ACADOS(GenericSolver):
     def acados_model_name(self) -> StrOptional:
         return self._acados_model_name
 
+    @property
+    def check_reuse_possible(self) -> Bool:
+        return self._check_reuse_possible
+
+    @property
+    def tol_code_reuse(self) -> Float:
+        return self._tol_code_reuse
+
+    @property
+    def reset_solver_before_solve(self) -> Bool:
+        return self._reset_solver_before_solve
+
     def set_print_level(self, num: int) -> None:
         self._print_level = num
         self.set_only_first_options_has_changed(True)
@@ -312,6 +336,25 @@ class ACADOS(GenericSolver):
 
     def set_acados_model_name(self, val: Str) -> None:
         self._acados_model_name = val
+
+    def set_check_reuse_possible(self, val: Bool) -> None:
+        """
+        Enable Acados' formulation check before code generation.
+
+        Compatible generated code is reused. Missing or incompatible code is
+        regenerated and rebuilt, independently of ``c_compile``.
+        """
+        self._check_reuse_possible = val
+        self.set_only_first_options_has_changed(True)
+
+    def set_tol_code_reuse(self, val: Float) -> None:
+        """Set the absolute comparison tolerance used by Acados for code reuse."""
+        self._tol_code_reuse = val
+        self.set_only_first_options_has_changed(True)
+
+    def set_reset_solver_before_solve(self, val: Bool) -> None:
+        """Reset Acados' iterates and QP memory before every repeated solve."""
+        self._reset_solver_before_solve = val
 
     @staticmethod
     def get_tolerance_keys() -> StrList:
