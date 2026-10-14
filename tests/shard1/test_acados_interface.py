@@ -4,10 +4,12 @@ It tests the results of an optimal control problem with acados regarding the pro
 - the handling of mayer and lagrange obj
 """
 
+import importlib.util
 import os
 import shutil
 from sys import platform
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 import numpy as np
 import numpy.testing as npt
@@ -34,7 +36,22 @@ from tests.utils import TestUtils
 
 
 def test_acados_v055_diagnostics_snapshot():
-    from bioptim.interfaces.acados_interface import _collect_acados_diagnostics
+    # Only the backend imports are fake; execute the actual collector in an isolated module.
+    status_to_str = Mock(side_effect=["ACADOS_QP_FAILURE", "ACADOS_SUCCESS"])
+    with patch.dict(
+        "sys.modules",
+        {
+            "acados_template": SimpleNamespace(AcadosModel=object, AcadosOcp=object, AcadosOcpSolver=object),
+            "acados_template.utils": SimpleNamespace(status_to_str=status_to_str),
+        },
+    ):
+        spec = importlib.util.spec_from_file_location(
+            "bioptim.interfaces._acados_diagnostics_test",
+            TestUtils.bioptim_folder() + "/interfaces/acados_interface.py",
+        )
+        acados_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(acados_module)
+    _collect_acados_diagnostics = acados_module._collect_acados_diagnostics
 
     statistics = np.array(
         [
@@ -106,6 +123,8 @@ def test_acados_v055_diagnostics_snapshot():
     npt.assert_equal(feasible_qp_diagnostics["qp_iterations_per_solve"], [[2, 4, 6], [3, 5, 7]])
     npt.assert_equal(feasible_qp_diagnostics["qp_iterations"], [12, 15])
     npt.assert_equal(feasible_qp_diagnostics["step_sizes"], [1.0, 0.5])
+    assert feasible_qp_diagnostics["status_label"] == "ACADOS_SUCCESS"
+    assert status_to_str.call_args_list == [call(4), call(0)]
 
 
 def test_acados_v055_codegen_configuration(tmp_path, monkeypatch):
