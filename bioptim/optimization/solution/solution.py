@@ -70,6 +70,8 @@ class Solution:
         The number of iterations that were required to solve the program
     status: int
         Optimization success status (Ipopt: 0=Succeeded, 1=Failed)
+    solver_diagnostics: dict
+        Solver-specific diagnostic values captured when the solve completed
     _stepwise_times: list
         The time corresponding to _stepwise_states
     _decision_states: SolutionData
@@ -127,6 +129,7 @@ class Solution:
         real_time_to_optimize: FloatOptional = None,
         iterations: IntOptional = None,
         status: IntOptional = None,
+        solver_diagnostics: AnyDict = None,
     ):
         """
         Parameters
@@ -159,6 +162,8 @@ class Solution:
             The number of iterations
         status: int
             The status of the solution
+        solver_diagnostics: dict
+            Solver-specific diagnostic values captured when the solve completed
         """
 
         self.ocp = ocp
@@ -168,6 +173,7 @@ class Solution:
 
         # Solver options
         self.status, self.iterations = status, iterations
+        self.solver_diagnostics = solver_diagnostics
         self.lam_g, self.lam_p, self.lam_x, self.inf_pr, self.inf_du = lam_g, lam_p, lam_x, inf_pr, inf_du
         self.solver_time_to_optimize, self.real_time_to_optimize = solver_time_to_optimize, real_time_to_optimize
 
@@ -223,6 +229,7 @@ class Solution:
             real_time_to_optimize=sol["real_time_to_optimize"],
             iterations=sol["iter"],
             status=sol["status"],
+            solver_diagnostics=sol.get("solver_diagnostics"),
         )
 
     @classmethod
@@ -277,12 +284,11 @@ class Solution:
 
         dt, sol_states, sol_controls, sol_params, sol_algebraic_states = sol
 
-        vector = np.ndarray((0, 1))
-
         # For time
         if len(dt.shape) == 1:
             dt = dt[:, np.newaxis]
-        vector = np.concatenate((vector, dt))
+
+        state_vector = [dt]
 
         # For states
         for p, ss in enumerate(sol_states):
@@ -299,9 +305,8 @@ class Solution:
 
             for i in range(all_ns[p] * nb_intermediate_frames + 1):
                 for key in ss.keys():
-                    vector = np.concatenate(
-                        (vector, ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, np.newaxis])
-                    )
+                    state_vector.append(ss[key].init.evaluate_at(i, nb_intermediate_frames)[:, None])
+        vector = np.vstack(state_vector)
 
         # For controls
         for p, ss in enumerate(sol_controls):
@@ -724,6 +729,8 @@ class Solution:
         new.solver_time_to_optimize = deepcopy(self.solver_time_to_optimize)
         new.real_time_to_optimize = deepcopy(self.real_time_to_optimize)
         new.iterations = deepcopy(self.iterations)
+        new.status = deepcopy(self.status)
+        new.solver_diagnostics = deepcopy(self.solver_diagnostics)
 
         new.phases_dt = deepcopy(self.phases_dt)
         new._stepwise_times = deepcopy(self._stepwise_times)
