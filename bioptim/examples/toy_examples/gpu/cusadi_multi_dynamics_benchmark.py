@@ -61,7 +61,6 @@ from bioptim.examples.toy_examples.gpu.cusadi_pendulum_benchmark import (
 )
 from bioptim.examples.utils import ExampleUtils
 
-
 CASE_NAMES = (
     "pendulum",
     "cube",
@@ -221,9 +220,7 @@ def _parse_int_list(value: str) -> list[int]:
 def _parse_gpu_block_sizes(value: str) -> list[int]:
     parsed = _parse_int_list(value)
     if any(item < 32 or item > 1024 or item % 32 for item in parsed):
-        raise argparse.ArgumentTypeError(
-            "GPU block sizes must be multiples of 32 between 32 and 1024"
-        )
+        raise argparse.ArgumentTypeError("GPU block sizes must be multiples of 32 between 32 and 1024")
     return parsed
 
 
@@ -333,20 +330,11 @@ def _prepare_case(
             ordering_strategy=ordering_strategy,
         )
     if case == "wholebody_gait":
-        data_path = (
-            Path(ExampleUtils.folder)
-            / "biomechanics"
-            / "gait_optimal_estimation"
-            / "ocp_data.pkl"
-        )
+        data_path = Path(ExampleUtils.folder) / "biomechanics" / "gait_optimal_estimation" / "ocp_data.pkl"
         with data_path.open("rb") as file:
             data = pickle.load(file)
-        frame_indices = (
-            np.linspace(0, data["n_shooting"], n_shooting + 1).round().astype(int)
-        )
-        external_forces = {
-            name: values[:, frame_indices] for name, values in data["f_ext_exp"].items()
-        }
+        frame_indices = np.linspace(0, data["n_shooting"], n_shooting + 1).round().astype(int)
+        external_forces = {name: values[:, frame_indices] for name, values in data["f_ext_exp"].items()}
         return prepare_wholebody_gait(
             biorbd_model_path=str(models / "wholebody_model.bioMod"),
             n_shooting=n_shooting,
@@ -363,13 +351,8 @@ def _prepare_case(
     raise ValueError(f"Unknown benchmark case: {case}")
 
 
-def _named_dynamics(
-    case: str, dynamics: casadi.Function, gpu_block_size: int
-) -> casadi.Function:
-    inputs = [
-        casadi.SX.sym(dynamics.name_in(index), dynamics.sparsity_in(index))
-        for index in range(dynamics.n_in())
-    ]
+def _named_dynamics(case: str, dynamics: casadi.Function, gpu_block_size: int) -> casadi.Function:
+    inputs = [casadi.SX.sym(dynamics.name_in(index), dynamics.sparsity_in(index)) for index in range(dynamics.n_in())]
     outputs = dynamics.call(inputs)
     return casadi.Function(
         f"{case}_block_{gpu_block_size}_ForwardDyn",
@@ -389,10 +372,7 @@ def _named_dynamics_derivative(
     if derivative_kind not in ("jacobian", "hessian"):
         raise ValueError("Derivative kind must be 'jacobian' or 'hessian'")
 
-    inputs = [
-        casadi.SX.sym(dynamics.name_in(index), dynamics.sparsity_in(index))
-        for index in range(dynamics.n_in())
-    ]
+    inputs = [casadi.SX.sym(dynamics.name_in(index), dynamics.sparsity_in(index)) for index in range(dynamics.n_in())]
     dynamics_output = dynamics.call(inputs)[0]
     variables = casadi.vertcat(inputs[1], inputs[2])
     function_inputs = inputs
@@ -461,8 +441,7 @@ def _named_nlp_oracles(
     constraint_jvp = casadi.jtimes(constraints_at_z, z, direction)
     constraint_vjp = casadi.jtimes(constraints_at_z, z, constraint_adjoint, True)
     lagrangian_gradient = casadi.gradient(
-        objective_factor * objective_at_z
-        + casadi.dot(constraint_adjoint, constraints_at_z),
+        objective_factor * objective_at_z + casadi.dot(constraint_adjoint, constraints_at_z),
         z,
     )
     lagrangian_hvp = casadi.jtimes(lagrangian_gradient, z, direction)
@@ -524,11 +503,7 @@ def _max_constraint_violation(ocp: Any, solution: Any) -> float | None:
     upper_bounds = np.asarray(ocp.ocp_solver.limits["ubg"], dtype=float)
     lower_violation = np.maximum(lower_bounds - constraints, 0.0)
     upper_violation = np.maximum(constraints - upper_bounds, 0.0)
-    violation = (
-        float(np.max(np.maximum(lower_violation, upper_violation)))
-        if constraints.size
-        else 0.0
-    )
+    violation = float(np.max(np.maximum(lower_violation, upper_violation))) if constraints.size else 0.0
     return violation if math.isfinite(violation) else None
 
 
@@ -636,14 +611,9 @@ def _run_cpu_solve(
     )
 
 
-def _make_case_inputs(
-    case: str, dynamics: casadi.Function, batch_size: int, seed: int
-) -> list[np.ndarray]:
+def _make_case_inputs(case: str, dynamics: casadi.Function, batch_size: int, seed: int) -> list[np.ndarray]:
     rng = np.random.default_rng(seed)
-    inputs = [
-        np.zeros((batch_size, dynamics.nnz_in(index)), dtype=np.float64)
-        for index in range(dynamics.n_in())
-    ]
+    inputs = [np.zeros((batch_size, dynamics.nnz_in(index)), dtype=np.float64) for index in range(dynamics.n_in())]
     if dynamics.n_in() > 0 and dynamics.nnz_in(0) == 2:
         inputs[0][:, 0] = rng.uniform(0.0, 1.0, size=batch_size)
         inputs[0][:, 1] = 0.01
@@ -697,15 +667,11 @@ def _mapped_output(dynamics: casadi.Function, inputs: list[np.ndarray]) -> np.nd
     return nonzeros.reshape(inputs[0].shape[0], dynamics.nnz_out(0))
 
 
-def _mapped_outputs(
-    function: casadi.Function, inputs: list[np.ndarray]
-) -> list[np.ndarray]:
+def _mapped_outputs(function: casadi.Function, inputs: list[np.ndarray]) -> list[np.ndarray]:
     mapped = function.map(inputs[0].shape[0], "serial")
     outputs = mapped.call([casadi.DM(values.T) for values in inputs])
     return [
-        np.asarray(output.nonzeros(), dtype=np.float64).reshape(
-            inputs[0].shape[0], function.nnz_out(index)
-        )
+        np.asarray(output.nonzeros(), dtype=np.float64).reshape(inputs[0].shape[0], function.nnz_out(index))
         for index, output in enumerate(outputs)
     ]
 
@@ -743,15 +709,10 @@ def _benchmark_gpu_case(
         raise TypeError(f"Expected a CasADi Function, got {type(dynamics).__name__}")
 
     inputs_by_batch = {
-        batch_size: _make_case_inputs(
-            case, dynamics, batch_size, args.seed + batch_index
-        )
+        batch_size: _make_case_inputs(case, dynamics, batch_size, args.seed + batch_index)
         for batch_index, batch_size in enumerate(args.gpu_batch_sizes)
     }
-    references = {
-        batch_size: _mapped_output(dynamics, inputs)
-        for batch_size, inputs in inputs_by_batch.items()
-    }
+    references = {batch_size: _mapped_output(dynamics, inputs) for batch_size, inputs in inputs_by_batch.items()}
     cpu_timings = {
         (batch_size, cpu_cores): _time_casadi_cpu(
             dynamics,
@@ -768,34 +729,21 @@ def _benchmark_gpu_case(
     used_operations: list[str] = []
     for gpu_block_size in args.gpu_block_sizes:
         named_dynamics = _named_dynamics(case, dynamics, gpu_block_size)
-        _, used_operations = _generate_cuda_source(
-            named_dynamics, cusadi_root, gpu_block_size
-        )
+        _, used_operations = _generate_cuda_source(named_dynamics, cusadi_root, gpu_block_size)
         capability = torch.cuda.get_device_capability()
-        _compile_cuda_source(
-            cusadi_root, named_dynamics.name(), [capability[0] * 10 + capability[1]]
-        )
+        _compile_cuda_source(cusadi_root, named_dynamics.name(), [capability[0] * 10 + capability[1]])
 
         for batch_size, cpu_inputs in inputs_by_batch.items():
-            cusadi_function = _load_cusadi_function(
-                cusadi_root, named_dynamics, batch_size
-            )
+            cusadi_function = _load_cusadi_function(cusadi_root, named_dynamics, batch_size)
             gpu_inputs = [
-                torch.from_numpy(values)
-                .to(device="cuda", dtype=torch.float64)
-                .contiguous()
-                for values in cpu_inputs
+                torch.from_numpy(values).to(device="cuda", dtype=torch.float64).contiguous() for values in cpu_inputs
             ]
             cusadi_function.evaluate(gpu_inputs)
             torch.cuda.synchronize()
             candidate = cusadi_function.outputs_sparse[0].detach().cpu().numpy()
             reference = references[batch_size]
-            np.testing.assert_allclose(
-                candidate, reference, rtol=args.rtol, atol=args.atol
-            )
-            max_absolute_error, max_relative_error = _error_metrics(
-                reference, candidate
-            )
+            np.testing.assert_allclose(candidate, reference, rtol=args.rtol, atol=args.atol)
+            max_absolute_error, max_relative_error = _error_metrics(reference, candidate)
             kernel_ms, resident_ms, with_transfers_ms = _time_cusadi_gpu(
                 torch,
                 cusadi_function,
@@ -830,12 +778,10 @@ def _benchmark_gpu_case(
         "description": CASE_DESCRIPTIONS[case],
         "n_shooting": n_shooting,
         "function_inputs": [
-            {"name": dynamics.name_in(index), "nonzeros": dynamics.nnz_in(index)}
-            for index in range(dynamics.n_in())
+            {"name": dynamics.name_in(index), "nonzeros": dynamics.nnz_in(index)} for index in range(dynamics.n_in())
         ],
         "function_outputs": [
-            {"name": dynamics.name_out(index), "nonzeros": dynamics.nnz_out(index)}
-            for index in range(dynamics.n_out())
+            {"name": dynamics.name_out(index), "nonzeros": dynamics.nnz_out(index)} for index in range(dynamics.n_out())
         ],
         "instructions": dynamics.n_instructions(),
         "work_size": dynamics.sz_w(),
@@ -898,8 +844,7 @@ def _benchmark_gpu_derivatives_case(
             for batch_index, batch_size in enumerate(args.derivative_batch_sizes)
         }
         references = {
-            batch_size: _mapped_output(reference_function, inputs)
-            for batch_size, inputs in inputs_by_batch.items()
+            batch_size: _mapped_output(reference_function, inputs) for batch_size, inputs in inputs_by_batch.items()
         }
         cpu_timings = {
             (batch_size, cpu_cores): _time_casadi_cpu(
@@ -916,11 +861,7 @@ def _benchmark_gpu_derivatives_case(
         derivative_metadata = {
             "case": case,
             "derivative_kind": derivative_kind,
-            "definition": (
-                "d(f)/d(x,u)"
-                if derivative_kind == "jacobian"
-                else "d2(adjoint^T f)/d(x,u)2"
-            ),
+            "definition": ("d(f)/d(x,u)" if derivative_kind == "jacobian" else "d2(adjoint^T f)/d(x,u)2"),
             "variable_size": variable_size,
             "output_rows": reference_function.size1_out(0),
             "output_columns": reference_function.size2_out(0),
@@ -937,9 +878,7 @@ def _benchmark_gpu_derivatives_case(
                 derivative_kind,
                 gpu_block_size,
             )
-            _, used_operations = _generate_cuda_source(
-                derivative_function, cusadi_root, gpu_block_size
-            )
+            _, used_operations = _generate_cuda_source(derivative_function, cusadi_root, gpu_block_size)
             derivative_metadata["operations"] = used_operations
             capability = torch.cuda.get_device_capability()
             _compile_cuda_source(
@@ -949,25 +888,17 @@ def _benchmark_gpu_derivatives_case(
             )
 
             for batch_size, cpu_inputs in inputs_by_batch.items():
-                cusadi_function = _load_cusadi_function(
-                    cusadi_root, derivative_function, batch_size
-                )
+                cusadi_function = _load_cusadi_function(cusadi_root, derivative_function, batch_size)
                 gpu_inputs = [
-                    torch.from_numpy(values)
-                    .to(device="cuda", dtype=torch.float64)
-                    .contiguous()
+                    torch.from_numpy(values).to(device="cuda", dtype=torch.float64).contiguous()
                     for values in cpu_inputs
                 ]
                 cusadi_function.evaluate(gpu_inputs)
                 torch.cuda.synchronize()
                 candidate = cusadi_function.outputs_sparse[0].detach().cpu().numpy()
                 reference = references[batch_size]
-                np.testing.assert_allclose(
-                    candidate, reference, rtol=args.rtol, atol=args.atol
-                )
-                max_absolute_error, max_relative_error = _error_metrics(
-                    reference, candidate
-                )
+                np.testing.assert_allclose(candidate, reference, rtol=args.rtol, atol=args.atol)
+                max_absolute_error, max_relative_error = _error_metrics(reference, candidate)
                 kernel_ms, resident_ms, with_transfers_ms = _time_cusadi_gpu(
                     torch,
                     cusadi_function,
@@ -1077,8 +1008,7 @@ def _benchmark_gpu_nlp_oracles_case(
         }
         function_inputs[oracle_kind] = inputs_by_batch
         references[oracle_kind] = {
-            batch_size: _mapped_outputs(reference_function, inputs)
-            for batch_size, inputs in inputs_by_batch.items()
+            batch_size: _mapped_outputs(reference_function, inputs) for batch_size, inputs in inputs_by_batch.items()
         }
         for batch_size, inputs in inputs_by_batch.items():
             for cpu_cores in args.cpu_cores:
@@ -1100,12 +1030,8 @@ def _benchmark_gpu_nlp_oracles_case(
         functions, _ = _named_nlp_oracles(case, ocp, gpu_block_size)
         for oracle_kind in args.nlp_oracles:
             function = functions[oracle_kind]
-            _, used_operations = _generate_cuda_source(
-                function, cusadi_root, gpu_block_size
-            )
-            _compile_cuda_source(
-                cusadi_root, function.name(), [capability[0] * 10 + capability[1]]
-            )
+            _, used_operations = _generate_cuda_source(function, cusadi_root, gpu_block_size)
+            _compile_cuda_source(cusadi_root, function.name(), [capability[0] * 10 + capability[1]])
             if gpu_block_size == args.gpu_block_sizes[0]:
                 metadata.append(
                     {
@@ -1123,9 +1049,7 @@ def _benchmark_gpu_nlp_oracles_case(
                         }[oracle_kind],
                         "decision_variables": n_variables,
                         "constraints": n_constraints,
-                        "output_nonzeros": sum(
-                            function.nnz_out(index) for index in range(function.n_out())
-                        ),
+                        "output_nonzeros": sum(function.nnz_out(index) for index in range(function.n_out())),
                         "instructions": function.n_instructions(),
                         "work_size": function.sz_w(),
                         "operations": used_operations,
@@ -1133,31 +1057,20 @@ def _benchmark_gpu_nlp_oracles_case(
                 )
 
             for batch_size, cpu_inputs in function_inputs[oracle_kind].items():
-                cusadi_function = _load_cusadi_function(
-                    cusadi_root, function, batch_size
-                )
+                cusadi_function = _load_cusadi_function(cusadi_root, function, batch_size)
                 gpu_inputs = [
-                    torch.from_numpy(values)
-                    .to(device="cuda", dtype=torch.float64)
-                    .contiguous()
+                    torch.from_numpy(values).to(device="cuda", dtype=torch.float64).contiguous()
                     for values in cpu_inputs
                 ]
                 cusadi_function.evaluate(gpu_inputs)
                 torch.cuda.synchronize()
-                candidate_outputs = [
-                    output.detach().cpu().numpy()
-                    for output in cusadi_function.outputs_sparse
-                ]
+                candidate_outputs = [output.detach().cpu().numpy() for output in cusadi_function.outputs_sparse]
                 reference_outputs = references[oracle_kind][batch_size]
                 for candidate, reference in zip(candidate_outputs, reference_outputs):
-                    np.testing.assert_allclose(
-                        candidate, reference, rtol=args.rtol, atol=args.atol
-                    )
+                    np.testing.assert_allclose(candidate, reference, rtol=args.rtol, atol=args.atol)
                 errors = [
                     _error_metrics(reference, candidate)
-                    for reference, candidate in zip(
-                        reference_outputs, candidate_outputs
-                    )
+                    for reference, candidate in zip(reference_outputs, candidate_outputs)
                 ]
                 max_absolute_error = max(error[0] for error in errors)
                 max_relative_error = max(error[1] for error in errors)
@@ -1177,10 +1090,7 @@ def _benchmark_gpu_nlp_oracles_case(
                             n_shooting=n_shooting,
                             decision_variables=n_variables,
                             constraints=n_constraints,
-                            output_nonzeros=sum(
-                                function.nnz_out(index)
-                                for index in range(function.n_out())
-                            ),
+                            output_nonzeros=sum(function.nnz_out(index) for index in range(function.n_out())),
                             instructions=function.n_instructions(),
                             work_size=function.sz_w(),
                             batch_size=batch_size,
@@ -1265,9 +1175,7 @@ def _print_nlp_oracle_results(case: str, rows: list[NlpOracleBenchmarkResult]) -
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--cases", nargs="+", choices=CASE_NAMES, default=list(CASE_NAMES)
-    )
+    parser.add_argument("--cases", nargs="+", choices=CASE_NAMES, default=list(CASE_NAMES))
     parser.add_argument(
         "--cpu-cores",
         type=_parse_int_list,
@@ -1335,20 +1243,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run intentionally iteration-limited OCP solves for cases normally restricted to dynamics measurements",
     )
-    parser.add_argument(
-        "--cusadi-root", type=Path, default=os.environ.get("CUSADI_ROOT")
-    )
-    parser.add_argument(
-        "--output", type=Path, default=Path("cusadi_multi_dynamics_results.json")
-    )
+    parser.add_argument("--cusadi-root", type=Path, default=os.environ.get("CUSADI_ROOT"))
+    parser.add_argument("--output", type=Path, default=Path("cusadi_multi_dynamics_results.json"))
 
     parser.add_argument("--_cpu-worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--_worker-case", choices=CASE_NAMES, help=argparse.SUPPRESS)
     parser.add_argument("--_worker-n-shooting", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--_worker-cpu-cores", type=int, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--_worker-repetition", type=int, default=0, help=argparse.SUPPRESS
-    )
+    parser.add_argument("--_worker-repetition", type=int, default=0, help=argparse.SUPPRESS)
     return parser
 
 
@@ -1360,29 +1262,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if any(cpu_cores > (os.cpu_count() or cpu_cores) for cpu_cores in args.cpu_cores):
-        raise ValueError(
-            f"Requested CPU core count exceeds the {os.cpu_count()} logical CPUs available"
-        )
+        raise ValueError(f"Requested CPU core count exceeds the {os.cpu_count()} logical CPUs available")
     if not args.skip_gpu and args.cusadi_root is None:
-        raise ValueError(
-            "--cusadi-root or the CUSADI_ROOT environment variable is required for GPU measurements"
-        )
+        raise ValueError("--cusadi-root or the CUSADI_ROOT environment variable is required for GPU measurements")
 
     solve_results: list[OcpSolveResult] = []
     if not args.skip_ocp_solves:
         for case in args.cases:
-            if (
-                case in DYNAMICS_ONLY_CASES
-                and not args.include_dynamics_only_ocp_solves
-            ):
+            if case in DYNAMICS_ONLY_CASES and not args.include_dynamics_only_ocp_solves:
                 print(f"CPU solve {case:20s} skipped: {DYNAMICS_ONLY_CASES[case]}")
                 continue
             n_shooting = _case_n_shooting(case, args.n_shooting)
             for cpu_cores in args.cpu_cores:
                 for repetition in range(args.solve_repetitions):
-                    result = _run_cpu_solve(
-                        args, case, n_shooting, cpu_cores, repetition
-                    )
+                    result = _run_cpu_solve(args, case, n_shooting, cpu_cores, repetition)
                     solve_results.append(result)
                     _print_solve_result(result)
 
@@ -1403,11 +1296,7 @@ def main(argv: list[str] | None = None) -> int:
     derivative_results: list[DerivativeBenchmarkResult] = []
     nlp_oracle_metadata: list[dict[str, Any]] = []
     nlp_oracle_results: list[NlpOracleBenchmarkResult] = []
-    cusadi_root = (
-        args.cusadi_root.expanduser().resolve()
-        if args.cusadi_root is not None
-        else None
-    )
+    cusadi_root = args.cusadi_root.expanduser().resolve() if args.cusadi_root is not None else None
     if not args.skip_gpu:
         if platform.system() != "Linux":
             raise RuntimeError("CusADi GPU measurements require Linux")
@@ -1415,9 +1304,7 @@ def main(argv: list[str] | None = None) -> int:
         device = torch.cuda.get_device_properties(torch.cuda.current_device())
         gpu_metadata = {
             "name": device.name,
-            "compute_capability": ".".join(
-                map(str, torch.cuda.get_device_capability())
-            ),
+            "compute_capability": ".".join(map(str, torch.cuda.get_device_capability())),
             "multiprocessor_count": device.multi_processor_count,
             "max_threads_per_multiprocessor": device.max_threads_per_multi_processor,
             "total_memory_bytes": device.total_memory,
@@ -1426,26 +1313,20 @@ def main(argv: list[str] | None = None) -> int:
         }
         for case in args.cases:
             n_shooting = _case_n_shooting(case, args.n_shooting)
-            metadata, rows = _benchmark_gpu_case(
-                args, case, n_shooting, cusadi_root, torch
-            )
+            metadata, rows = _benchmark_gpu_case(args, case, n_shooting, cusadi_root, torch)
             case_metadata[args.cases.index(case)] = metadata
             dynamics_results.extend(rows)
             _print_dynamics_results(case, rows)
             if args.gpu_derivatives:
                 if case in FULL_DERIVATIVE_EXCLUSIONS:
-                    print(
-                        f"GPU derivatives {case:17s} skipped: {FULL_DERIVATIVE_EXCLUSIONS[case]}"
-                    )
+                    print(f"GPU derivatives {case:17s} skipped: {FULL_DERIVATIVE_EXCLUSIONS[case]}")
                 else:
-                    case_derivative_metadata, derivative_rows = (
-                        _benchmark_gpu_derivatives_case(
-                            args,
-                            case,
-                            n_shooting,
-                            cusadi_root,
-                            torch,
-                        )
+                    case_derivative_metadata, derivative_rows = _benchmark_gpu_derivatives_case(
+                        args,
+                        case,
+                        n_shooting,
+                        cusadi_root,
+                        torch,
                     )
                     derivative_metadata.extend(case_derivative_metadata)
                     derivative_results.extend(derivative_rows)
@@ -1475,9 +1356,7 @@ def main(argv: list[str] | None = None) -> int:
             "native_thread_limits": list(THREAD_ENVIRONMENT_VARIABLES),
             "gpu": gpu_metadata,
             "bioptim_revision": _git_revision(Path(__file__).resolve().parents[4]),
-            "cusadi_revision": (
-                _git_revision(cusadi_root) if cusadi_root is not None else None
-            ),
+            "cusadi_revision": (_git_revision(cusadi_root) if cusadi_root is not None else None),
             "gpu_ocp_solve_supported": False,
             "gpu_ocp_solve_limitation": (
                 "CusADi evaluates batched CasADi functions but does not provide an NLP solver. This benchmark can "
@@ -1517,9 +1396,7 @@ def main(argv: list[str] | None = None) -> int:
         "nlp_oracle_benchmarks": [asdict(result) for result in nlp_oracle_results],
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-    )
+    args.output.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8")
     print(f"\nWrote benchmark results to {args.output}")
     return 0
 

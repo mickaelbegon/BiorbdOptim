@@ -32,6 +32,7 @@ from bioptim import (
     TimeAlignment,
 )
 from bioptim.examples.utils import ExampleUtils
+
 try:
     from .model import WithResidualExternalForces, animate_solution
 except ImportError:

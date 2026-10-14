@@ -39,7 +39,6 @@ from bioptim.examples.toy_examples.gpu.cusadi_multi_dynamics_benchmark import (
     _prepare_case,
 )
 
-
 FUNCTION_ROLES = ("nlp", "grad_f", "jac_g", "hess_lag")
 
 
@@ -116,9 +115,7 @@ def _named_ipopt_functions(
     if hessian_approximation == "exact":
         objective_factor = casadi.SX.sym("lam_f")
         constraint_multipliers = casadi.SX.sym("lam_g", n_constraints)
-        lagrangian = objective_factor * objective_at_x + casadi.dot(
-            constraint_multipliers, constraints_at_x
-        )
+        lagrangian = objective_factor * objective_at_x + casadi.dot(constraint_multipliers, constraints_at_x)
         upper_hessian = casadi.triu(casadi.hessian(lagrangian, x)[0])
         functions["hess_lag"] = casadi.Function(
             f"{prefix}HessLag",
@@ -133,9 +130,7 @@ def _named_ipopt_functions(
 class _FunctionBackend:
     def __init__(self, functions: dict[str, casadi.Function]):
         self.functions = functions
-        self.function_roles = {
-            function.name(): role for role, function in functions.items()
-        }
+        self.function_roles = {function.name(): role for role, function in functions.items()}
         self.calls = {role: 0 for role in functions}
         self.wall_s = 0.0
 
@@ -189,19 +184,14 @@ class _CusadiGpuBackend(_FunctionBackend):
         inputs: list[np.ndarray],
     ) -> list[np.ndarray]:
         gpu_inputs = [
-            self.torch.from_numpy(
-                np.ascontiguousarray(value, dtype=np.float64).reshape(1, -1)
-            )
+            self.torch.from_numpy(np.ascontiguousarray(value, dtype=np.float64).reshape(1, -1))
             .to(device="cuda", dtype=self.torch.float64)
             .contiguous()
             for value in inputs
         ]
         gpu_function = self.gpu_functions[self.function_roles[function.name()]]
         gpu_function.evaluate(gpu_inputs)
-        return [
-            output.detach().cpu().numpy()[0].copy()
-            for output in gpu_function.outputs_sparse
-        ]
+        return [output.detach().cpu().numpy()[0].copy() for output in gpu_function.outputs_sparse]
 
 
 class _BackendCallback(casadi.Callback):
@@ -238,14 +228,9 @@ class _BackendCallback(casadi.Callback):
         return self.function.sparsity_out(index)
 
     def eval(self, arguments: list[casadi.DM]) -> list[casadi.DM]:
-        inputs = [
-            np.asarray(argument.nonzeros(), dtype=np.float64) for argument in arguments
-        ]
+        inputs = [np.asarray(argument.nonzeros(), dtype=np.float64) for argument in arguments]
         outputs = self.backend.evaluate(self.function, inputs)
-        return [
-            casadi.DM(self.function.sparsity_out(index), output)
-            for index, output in enumerate(outputs)
-        ]
+        return [casadi.DM(self.function.sparsity_out(index), output) for index, output in enumerate(outputs)]
 
     def has_jacobian(self) -> bool:
         return self.backend.function_roles[self.function.name()] == "nlp"
@@ -332,11 +317,7 @@ def _maximum_violation(
 ) -> float:
     lower_violation = np.maximum(lower_bounds - values, 0.0)
     upper_violation = np.maximum(values - upper_bounds, 0.0)
-    return (
-        float(np.max(np.maximum(lower_violation, upper_violation)))
-        if values.size
-        else 0.0
-    )
+    return float(np.max(np.maximum(lower_violation, upper_violation))) if values.size else 0.0
 
 
 def _solve_with_ipopt(
@@ -408,9 +389,7 @@ def _solve_with_ipopt(
         constraint_upper,
     )
     success = bool(statistics["success"])
-    outcome = (
-        "success" if success and violation <= 10.0 * tolerance else "solver_failure"
-    )
+    outcome = "success" if success and violation <= 10.0 * tolerance else "solver_failure"
     solver_wall_s = statistics.get("t_wall_total")
     if solver_wall_s is not None and not np.isfinite(solver_wall_s):
         solver_wall_s = None
@@ -519,26 +498,14 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if (
-        args.gpu_block_size < 32
-        or args.gpu_block_size > 1024
-        or args.gpu_block_size % 32
-    ):
-        raise ValueError(
-            "--gpu-block-size must be a multiple of 32 between 32 and 1024"
-        )
+    if args.gpu_block_size < 32 or args.gpu_block_size > 1024 or args.gpu_block_size % 32:
+        raise ValueError("--gpu-block-size must be a multiple of 32 between 32 and 1024")
     if not args.skip_gpu and args.cusadi_root is None:
-        raise ValueError(
-            "--cusadi-root or the CUSADI_ROOT environment variable is required"
-        )
+        raise ValueError("--cusadi-root or the CUSADI_ROOT environment variable is required")
 
     torch = None
     gpu_metadata = None
-    cusadi_root = (
-        args.cusadi_root.expanduser().resolve()
-        if args.cusadi_root is not None
-        else None
-    )
+    cusadi_root = args.cusadi_root.expanduser().resolve() if args.cusadi_root is not None else None
     if not args.skip_gpu:
         if platform.system() != "Linux":
             raise RuntimeError("CusADi GPU measurements require Linux")
@@ -546,9 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         device = torch.cuda.get_device_properties(torch.cuda.current_device())
         gpu_metadata = {
             "name": device.name,
-            "compute_capability": ".".join(
-                map(str, torch.cuda.get_device_capability())
-            ),
+            "compute_capability": ".".join(map(str, torch.cuda.get_device_capability())),
             "total_memory_bytes": device.total_memory,
             "torch": torch.__version__,
             "cuda_runtime": torch.version.cuda,
@@ -574,9 +539,7 @@ def main(argv: list[str] | None = None) -> int:
                     role: {
                         "instructions": function.n_instructions(),
                         "work_size": function.sz_w(),
-                        "output_nonzeros": [
-                            function.nnz_out(index) for index in range(function.n_out())
-                        ],
+                        "output_nonzeros": [function.nnz_out(index) for index in range(function.n_out())],
                     }
                     for role, function in functions.items()
                 },
@@ -614,11 +577,7 @@ def main(argv: list[str] | None = None) -> int:
             for role in gpu_roles:
                 function = functions[role]
                 source_path = cusadi_root / "codegen" / f"{function.name()}.cu"
-                previous_source = (
-                    source_path.read_text(encoding="utf-8")
-                    if source_path.is_file()
-                    else None
-                )
+                previous_source = source_path.read_text(encoding="utf-8") if source_path.is_file() else None
                 generated_source, operations[role] = _generate_cuda_source(
                     function,
                     cusadi_root,
@@ -626,12 +585,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 library = cusadi_root / "build" / f"lib{function.name()}.so"
                 source_unchanged = (
-                    previous_source is not None
-                    and generated_source.read_text(encoding="utf-8") == previous_source
+                    previous_source is not None and generated_source.read_text(encoding="utf-8") == previous_source
                 )
-                reuse_library = (
-                    library.is_file() and source_unchanged and not args.rebuild
-                )
+                reuse_library = library.is_file() and source_unchanged and not args.rebuild
                 reused_libraries[role] = reuse_library
                 if not reuse_library:
                     _compile_cuda_source(
@@ -642,10 +598,7 @@ def main(argv: list[str] | None = None) -> int:
             compilation_s = time.perf_counter() - compile_start
             function_metadata[-1]["operations"] = operations
             function_metadata[-1]["reused_libraries"] = reused_libraries
-            gpu_functions = {
-                role: _load_cusadi_function(cusadi_root, functions[role], 1)
-                for role in gpu_roles
-            }
+            gpu_functions = {role: _load_cusadi_function(cusadi_root, functions[role], 1) for role in gpu_roles}
             function_metadata[-1]["gpu_functions"] = gpu_roles
             gpu_backend = _CusadiGpuBackend(
                 functions,
@@ -696,9 +649,7 @@ def main(argv: list[str] | None = None) -> int:
             "numpy": np.__version__,
             "gpu": gpu_metadata,
             "bioptim_revision": _git_revision(Path(__file__).resolve().parents[4]),
-            "cusadi_revision": (
-                _git_revision(cusadi_root) if cusadi_root is not None else None
-            ),
+            "cusadi_revision": (_git_revision(cusadi_root) if cusadi_root is not None else None),
             "architecture": (
                 "CasADi nlpsol/IPOPT with CPU KKT solve and interchangeable CPU CasADi or GPU CusADi "
                 "objective, constraints, gradient, sparse Jacobian, and sparse Lagrangian-Hessian callbacks"
