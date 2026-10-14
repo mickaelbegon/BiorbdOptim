@@ -38,7 +38,6 @@ from bioptim.examples.toy_examples.optimal_time_ocp.multiphase_time_constraint i
 from bioptim.examples.toy_examples.optimal_time_ocp.time_constraint import prepare_ocp as prepare_free_time
 from bioptim.examples.utils import ExampleUtils
 
-
 SOLVER_NAMES = ("ipopt", "fatrop", "acados", "madnlp")
 CASE_NAMES = (
     "pendulum",
@@ -336,11 +335,7 @@ def summarize(rows: list[RunResult]) -> list[dict]:
                 "median_iterations": median_or_none(successful, "iterations"),
                 "cost": successful[-1].cost if successful else None,
                 "max_constraint_violation": (
-                    max(
-                        row.max_constraint_violation
-                        for row in successful
-                        if row.max_constraint_violation is not None
-                    )
+                    max(row.max_constraint_violation for row in successful if row.max_constraint_violation is not None)
                     if any(row.max_constraint_violation is not None for row in successful)
                     else None
                 ),

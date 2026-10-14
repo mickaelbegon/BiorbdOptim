@@ -7,7 +7,6 @@ import csv
 import json
 from pathlib import Path
 
-
 CASE_ORDER = {
     "pendulum": 0,
     "cube": 1,
