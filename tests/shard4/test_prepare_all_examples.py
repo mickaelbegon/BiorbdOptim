@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 import numpy as np
 import pytest
 
@@ -124,15 +126,21 @@ def test__getting_started__custom_initial_guess(interpolation, random):
 
     bioptim_folder = TestUtils.bioptim_folder()
 
-    ocp_module.prepare_ocp(
-        bioptim_folder + "/examples/models/cube.bioMod",
-        n_shooting=30,
-        final_time=2,
-        random_init=random,
-        initial_guess=interpolation,
-        phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE,
-        expand_dynamics=True,
+    context = (
+        pytest.raises(ValueError, match="InterpolationType.ALL_POINTS cannot be used for control initial guesses")
+        if interpolation == InterpolationType.ALL_POINTS
+        else nullcontext()
     )
+    with context:
+        ocp_module.prepare_ocp(
+            bioptim_folder + "/examples/models/cube.bioMod",
+            n_shooting=30,
+            final_time=2,
+            random_init=random,
+            initial_guess=interpolation,
+            phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE,
+            expand_dynamics=True,
+        )
 
 
 def test__getting_started__custom_objectives():
@@ -314,6 +322,20 @@ def test__getting_started__example_multiphase():
     ocp_module.prepare_ocp(
         biorbd_model_path=bioptim_folder + "/examples/models/cube.bioMod",
         long_optim=True,
+        phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE,
+        expand_dynamics=False,
+    )
+
+
+def test__getting_started__example_pinocchio():
+    from bioptim.examples.getting_started import example_pinocchio as ocp_module
+
+    bioptim_folder = TestUtils.bioptim_folder()
+
+    ocp_module.prepare_ocp(
+        model_path=bioptim_folder + "/examples/models/pendulum.urdf",
+        final_time=3,
+        n_shooting=100,
         phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE,
         expand_dynamics=False,
     )
