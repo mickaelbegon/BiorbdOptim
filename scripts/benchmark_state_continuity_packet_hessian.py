@@ -119,7 +119,9 @@ def _gather(metadata, decision_indices, x: ca.DM, lam_g: ca.DM) -> tuple[ca.DM, 
     return x[list(decision_indices)], lam_g[rows]
 
 
-def _scatter(packet, local_hessians: list[np.ndarray], global_slots: dict[tuple[int, int], int], global_nnz: int) -> np.ndarray:
+def _scatter(
+    packet, local_hessians: list[np.ndarray], global_slots: dict[tuple[int, int], int], global_nnz: int
+) -> np.ndarray:
     """Scatter lower/upper local sparse triplets into canonical global slots."""
     values = np.zeros(global_nnz)
     for metadata, decision_indices, local_value in zip(packet.metadata, packet.decision_indices, local_hessians):
@@ -144,10 +146,14 @@ def _scatter(packet, local_hessians: list[np.ndarray], global_slots: dict[tuple[
 
 
 def _eval_individual(packet, x: ca.DM, lam_g: ca.DM, workers: int) -> list[np.ndarray]:
-    inputs = [_gather(metadata, indices, x, lam_g) for metadata, indices in zip(packet.metadata, packet.decision_indices)]
+    inputs = [
+        _gather(metadata, indices, x, lam_g) for metadata, indices in zip(packet.metadata, packet.decision_indices)
+    ]
+
     def call(item):
         _, (local_x, local_lam) = item
         return np.asarray(packet.lagrangian_hessian(local_x, local_lam))
+
     # CasADi Function calls are independent, but do not use a Python pool for
     # the main reported path: CasADi's native Function.map owns thread safety
     # and scheduling. This fallback exists only if a cycling instance is not
@@ -182,6 +188,7 @@ def main() -> None:
     registry = interface.build_post_shake_penalty_registry(materialize=False)
     raw_registry_s = time.perf_counter() - registry_tic
     import bioptim.interfaces.interface_utils as iu
+
     packet_tic = time.perf_counter()
     packet = registry.build_pre_shake_thread_map_packet(
         interface.ocp.variables_vector,
@@ -209,8 +216,18 @@ def main() -> None:
     global_rows, global_cols = hess.sparsity_out(0).get_triplet()
     global_slots = {(int(row), int(col)): k for k, (row, col) in enumerate(zip(global_rows, global_cols))}
     global_nnz = len(global_rows)
-    gathered_x = ca.horzcat(*[_gather(metadata, indices, x, lam_g)[0] for metadata, indices in zip(packet.metadata, packet.decision_indices)])
-    gathered_lam = ca.horzcat(*[_gather(metadata, indices, x, lam_g)[1] for metadata, indices in zip(packet.metadata, packet.decision_indices)])
+    gathered_x = ca.horzcat(
+        *[
+            _gather(metadata, indices, x, lam_g)[0]
+            for metadata, indices in zip(packet.metadata, packet.decision_indices)
+        ]
+    )
+    gathered_lam = ca.horzcat(
+        *[
+            _gather(metadata, indices, x, lam_g)[1]
+            for metadata, indices in zip(packet.metadata, packet.decision_indices)
+        ]
+    )
     measurements = []
     for workers in dict.fromkeys(args.workers):
         if algebraically_mappable:
@@ -221,12 +238,21 @@ def main() -> None:
             map_build_s = time.perf_counter() - build_tic
             eval_s, mapped_value = _time(mapped, gathered_x, gathered_lam, repeats=args.repeats)
             # CasADi returns horizontally concatenated sparse matrices.
-            local_hessians = [np.asarray(mapped_value[:, index * len(packet.decision_indices[0]):(index + 1) * len(packet.decision_indices[0])]) for index in range(len(packet.metadata))]
+            local_hessians = [
+                np.asarray(
+                    mapped_value[
+                        :, index * len(packet.decision_indices[0]) : (index + 1) * len(packet.decision_indices[0])
+                    ]
+                )
+                for index in range(len(packet.metadata))
+            ]
             evaluator = "casadi_map_thread"
         else:
             map_build_s = 0.0
+
             def run_individual():
                 return _eval_individual(packet, x, lam_g, workers)
+
             eval_s, local_hessians = _time(run_individual, repeats=args.repeats)
             evaluator = "python_pool_fallback"
         scatter_s, scattered = _time(_scatter, packet, local_hessians, global_slots, global_nnz, repeats=args.repeats)
@@ -237,23 +263,26 @@ def main() -> None:
         finite = bool(np.all(np.isfinite(native_values)) and np.all(np.isfinite(scattered)))
         max_abs = float(np.max(np.abs(delta), initial=0.0)) if finite else None
         nonzero_mismatch = int(np.count_nonzero(np.abs(delta) > 1e-10)) if finite else None
-        measurements.append({
-            "workers": workers,
-            "evaluator": evaluator,
-            "map_build_s": map_build_s,
-            "local_hessian_eval_median_s": eval_s,
-            "scatter_add_median_s": scatter_s,
-            "packet_total_median_s": eval_s + scatter_s,
-            "native_continuity_hessian_median_s": native_s,
-            "speedup_vs_native_continuity": native_s / max(eval_s + scatter_s, 1e-15),
-            "max_abs_packet_minus_native": max_abs,
-            "entries_above_1e-10": nonzero_mismatch,
-            "comparison_finite": finite,
-        })
+        measurements.append(
+            {
+                "workers": workers,
+                "evaluator": evaluator,
+                "map_build_s": map_build_s,
+                "local_hessian_eval_median_s": eval_s,
+                "scatter_add_median_s": scatter_s,
+                "packet_total_median_s": eval_s + scatter_s,
+                "native_continuity_hessian_median_s": native_s,
+                "speedup_vs_native_continuity": native_s / max(eval_s + scatter_s, 1e-15),
+                "max_abs_packet_minus_native": max_abs,
+                "entries_above_1e-10": nonzero_mismatch,
+                "comparison_finite": finite,
+            }
+        )
     result = {
         "mode": "prototype_only_no_ipopt_callback_no_solve",
         "command": command,
-        "nx": int(hess.size1_in(0)), "ng": int(ng),
+        "nx": int(hess.size1_in(0)),
+        "ng": int(ng),
         "global_hessian_triangular_nnz": global_nnz,
         "raw_registry_build_s": raw_registry_s,
         "packet_build_s": packet_build_s,

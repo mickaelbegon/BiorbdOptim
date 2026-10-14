@@ -193,9 +193,14 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
             plugin_name = interface.solver_name.lower()
             if compile_configuration[5]:
                 interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol_callbacks(
-                    plugin_name, interface.nlp, options, compiler_flags=compile_configuration[1],
-                    cache_dir=compile_configuration[2], cache_name=compile_configuration[3],
-                    vm_solver=prepared_solver, callbacks=compile_configuration[6],
+                    plugin_name,
+                    interface.nlp,
+                    options,
+                    compiler_flags=compile_configuration[1],
+                    cache_dir=compile_configuration[2],
+                    cache_name=compile_configuration[3],
+                    vm_solver=prepared_solver,
+                    callbacks=compile_configuration[6],
                 )
             elif compile_configuration[2] is not None:
                 interface.shaked_ocp_solver, interface.c_compile_cache_info = cached_nlpsol(
@@ -419,9 +424,7 @@ def _shake_penalties_tree(ocp, penalties_cx: CX, v: CX, v_bounds: DoubleNpArrayT
     return penalty(vertcat(*dt, v[len(dt) :]))
 
 
-def _normalize_pre_shake_thread_map_fragment(
-    ocp, expression: CX, v: CX, v_bounds: DoubleNpArrayTuple
-) -> CX:
+def _normalize_pre_shake_thread_map_fragment(ocp, expression: CX, v: CX, v_bounds: DoubleNpArrayTuple) -> CX:
     """Apply ``shake``'s phase-duration substitution without a temporary Function.
 
     The canonical aggregate is still shaken through
@@ -811,9 +814,7 @@ def generic_get_all_penalties(
                 and len(penalty.node_idx) > 1
             )
             if split_by_stage:
-                rows_per_node, remainder = divmod(
-                    penalty_value.shape[0], len(penalty.node_idx)
-                )
+                rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
                 if remainder:
                     raise RuntimeError(
                         f"Cannot distribute multi-thread constraint {penalty.name} over "
@@ -841,11 +842,7 @@ def generic_get_all_penalties(
                 # objective parent has no ``g`` interval to scatter into, so
                 # leave it as its existing aggregate term until an objective
                 # packet contract is introduced separately.
-                if (
-                    post_shake_registry is not None
-                    and registry_kind == "constraint"
-                    and len(penalty.node_idx) > 1
-                ):
+                if post_shake_registry is not None and registry_kind == "constraint" and len(penalty.node_idx) > 1:
                     rows_per_node, remainder = divmod(penalty_value.shape[0], len(penalty.node_idx))
                     if not remainder:
                         for position, node_idx in enumerate(penalty.node_idx):

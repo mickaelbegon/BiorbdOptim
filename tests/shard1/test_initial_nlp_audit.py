@@ -78,9 +78,9 @@ def test_post_shake_penalty_registry_uses_final_canonical_constraint_rows():
     shaked_g = interface_utils._shake_penalties_tree(
         interface.ocp, g, interface.ocp.variables_vector, interface.ocp.bounds_vectors, False
     )
-    g_at_initial = np.asarray(Function("registry_g", [interface.ocp.variables_vector], [shaked_g])(
-        interface.ocp.init_vector
-    )).reshape(-1)
+    g_at_initial = np.asarray(
+        Function("registry_g", [interface.ocp.variables_vector], [shaked_g])(interface.ocp.init_vector)
+    ).reshape(-1)
 
     rebuilt_g = np.zeros_like(g_at_initial)
     for term in constraint_terms:
@@ -118,9 +118,7 @@ def test_pre_shake_thread_map_fragments_use_scalar_stage_graphs_and_exact_canoni
     ]
 
     g, _ = interface.dispatch_bounds()
-    shaked_g = interface_utils._shake_penalties_tree(
-        ocp, g, ocp.variables_vector, ocp.bounds_vectors, False
-    )
+    shaked_g = interface_utils._shake_penalties_tree(ocp, g, ocp.variables_vector, ocp.bounds_vectors, False)
     g_at_initial = np.asarray(Function("pre_map_g", [ocp.variables_vector], [shaked_g])(ocp.init_vector)).reshape(-1)
     values = np.asarray(ocp.init_vector).reshape(-1)
     for term in fragments:
@@ -154,9 +152,7 @@ def test_initial_nlp_audit_uses_exact_shaked_collocation_graph_and_caches_functi
     second_audit = interface.initial_nlp_audits[-1]
 
     submitted_limits = fake_nlpsol[0].call_limits[0]
-    exact_g = Function("test_exact_initial_g", [interface.nlp["x"]], [interface.nlp["g"]])(
-        submitted_limits["x0"]
-    )
+    exact_g = Function("test_exact_initial_g", [interface.nlp["x"]], [interface.nlp["g"]])(submitted_limits["x0"])
     constraint_violations = _direct_bound_violation(
         exact_g,
         submitted_limits["lbg"],

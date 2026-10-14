@@ -227,7 +227,9 @@ def test_compiled_thread_map_external_preserves_exact_jacobian_and_hessian(tmp_p
     args = (ca.DM([2.0, 3.0]), ca.DM([4.0]))
     np.testing.assert_allclose(compiled(*args), native(*args), atol=0, rtol=0)
     np.testing.assert_allclose(compiled_jacobian(*args), native_jacobian(*args), atol=0, rtol=0)
-    np.testing.assert_allclose(compiled_hessian(*args, ca.DM([1.0, 2.0])), native_hessian(*args, ca.DM([1.0, 2.0])), atol=0, rtol=0)
+    np.testing.assert_allclose(
+        compiled_hessian(*args, ca.DM([1.0, 2.0])), native_hessian(*args, ca.DM([1.0, 2.0])), atol=0, rtol=0
+    )
 
     # A second independent call is the normal FHO-successor case: the
     # content-addressed artifact and its manifest must be reused, rather than
@@ -244,9 +246,7 @@ def test_packetized_compiled_thread_map_external_preserves_exact_second_order_ad
     """Output packetization bounds C units without changing the MX derivatives."""
 
     x = ca.MX.sym("x", 3)
-    native = ca.Function(
-        "wide_thread_map_stage", [x], [ca.vertcat(x[0] ** 2, ca.sin(x[1]), x[0] * x[2], x[2] ** 3)]
-    )
+    native = ca.Function("wide_thread_map_stage", [x], [ca.vertcat(x[0] ** 2, ca.sin(x[1]), x[0] * x[2], x[2] ** 3)])
     packetized = compile_external_output_packets(native, tmp_path, max_output_rows=2)
     multiplier = ca.MX.sym("lambda", 4)
     native_hessian = ca.Function("wide_native_h", [x, multiplier], [ca.hessian(ca.dot(multiplier, native(x)), x)[0]])

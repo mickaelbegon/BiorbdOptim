@@ -4,7 +4,6 @@ from time import perf_counter
 
 import casadi
 
-
 TRANSFORM_PASSES = (("simplify", "cse", "ref_count", "const_folding"),)
 
 

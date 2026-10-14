@@ -15,7 +15,6 @@ from typing import Any, Callable
 
 from casadi import Function, MX, SX, hessian, jacobian, substitute, sum1, vertcat
 
-
 CX = MX | SX
 
 
@@ -169,7 +168,9 @@ class PostShakePenaltyRegistry:
         rows_per_stage: dict[int, int] = {}
         for pending in self._pending:
             if pending.metadata.kind == "constraint" and not pending.metadata.thread_map_fragment:
-                rows_per_stage[pending.metadata.stage] = rows_per_stage.get(pending.metadata.stage, 0) + pending.expression.shape[0]
+                rows_per_stage[pending.metadata.stage] = (
+                    rows_per_stage.get(pending.metadata.stage, 0) + pending.expression.shape[0]
+                )
         stage_base: dict[int, int] = {}
         next_row = 0
         for stage in sorted(rows_per_stage):
@@ -230,9 +231,7 @@ class PostShakePenaltyRegistry:
                     hessian_sparsity=local_hessian.sparsity(),
                     value=Function(f"{identifier}_value", [local_x], [local_expression]),
                     jacobian=Function(f"{identifier}_jacobian", [local_x], [local_jacobian]),
-                    lagrangian_hessian=Function(
-                        f"{identifier}_hessian", [local_x, multipliers], [local_hessian]
-                    ),
+                    lagrangian_hessian=Function(f"{identifier}_hessian", [local_x, multipliers], [local_hessian]),
                 )
             )
         # ThreadMap fragments occupy slices of an aggregate parent, rather
@@ -319,7 +318,10 @@ class PostShakePenaltyRegistry:
                 representative_expression = expression
                 representative_indices = active_columns
                 representative_jacobian = jac
-            elif active_columns.__len__() != representative_indices.__len__() or expression.shape != representative_expression.shape:
+            elif (
+                active_columns.__len__() != representative_indices.__len__()
+                or expression.shape != representative_expression.shape
+            ):
                 raise ValueError(
                     f"ThreadMap family {penalty_name!r} is not structurally homogeneous; split it before mapping."
                 )

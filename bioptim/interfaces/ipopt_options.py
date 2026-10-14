@@ -370,9 +370,13 @@ class IPOPT(GenericSolver):
         self._native_callbacks = None
 
     def set_c_compile_callbacks(
-        self, val: Bool, *, cache_dir: str | os.PathLike | None = None,
+        self,
+        val: Bool,
+        *,
+        cache_dir: str | os.PathLike | None = None,
         callbacks: list[str] | tuple[str, ...] | None = None,
-        compiler_flags: list[str] | tuple[str, ...] = ("-O1",), cache_name: str = "ipopt",
+        compiler_flags: list[str] | tuple[str, ...] = ("-O1",),
+        cache_name: str = "ipopt",
     ) -> None:
         """Compile IPOPT evaluations into separate, persistently cached libraries.
 
@@ -393,7 +397,8 @@ class IPOPT(GenericSolver):
         if val and cache_dir is None:
             raise ValueError("Separate callback compilation requires cache_dir")
         if callbacks is not None and (
-            not isinstance(callbacks, (list, tuple)) or not callbacks
+            not isinstance(callbacks, (list, tuple))
+            or not callbacks
             or any(name not in IPOPT_NATIVE_CALLBACKS for name in callbacks)
             or len(set(callbacks)) != len(callbacks)
         ):

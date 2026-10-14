@@ -180,7 +180,9 @@ def _compile_exact_hessian(function: ca.Function, destination: Path, optimizatio
         os.chdir(old_cwd)
     completed = subprocess.run(
         [compiler, optimization, "-fPIC", "-shared", str(source), "-o", str(shared)],
-        text=True, capture_output=True, check=False,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     if completed.returncode:
         raise RuntimeError(f"C compilation failed:\n{completed.stderr}")
@@ -196,7 +198,9 @@ def main() -> None:
     parser.add_argument("--workers", type=int, nargs="+", default=[1, 2, 3, 12])
     parser.add_argument("--compile-local-kernel", action="store_true")
     parser.add_argument(
-        "--compiler-optimization", choices=["-O0", "-O1", "-O2", "-O3"], default="-O0",
+        "--compiler-optimization",
+        choices=["-O0", "-O1", "-O2", "-O3"],
+        default="-O0",
         help="C optimisation for the large exact Hessian kernel; O0 is the robust baseline.",
     )
     args = parser.parse_args()
@@ -217,7 +221,8 @@ def main() -> None:
         interface.ocp.variables_vector,
         lambda expression: iu._normalize_pre_shake_thread_map_fragment(
             interface.ocp, expression, interface.ocp.variables_vector, interface.ocp.bounds_vectors
-        ), "STATE_CONTINUITY",
+        ),
+        "STATE_CONTINUITY",
     )
     packet_build_s = time.perf_counter() - tic
     tic = time.perf_counter()
@@ -255,24 +260,37 @@ def main() -> None:
             above = int(np.count_nonzero(np.abs(delta) > 1e-10))
             if max_abs > 1e-10:
                 raise RuntimeError(f"{evaluator_name}/{workers}: packet mismatch {max_abs}")
-            measurements.append({
-                "evaluator": evaluator_name, "workers": workers,
-                "one_time_codegen_compile_s": compile_s, "one_time_map_build_s": map_build_s,
-                "gather_median_s": gather_s, "local_hessian_eval_median_s": eval_s,
-                "vectorized_scatter_median_s": scatter_s,
-                "cached_packet_callback_median_s": gather_s + eval_s + scatter_s,
-                "native_nlp_hess_l_median_s": native_s,
-                "speedup_vs_native": native_s / max(gather_s + eval_s + scatter_s, 1e-15),
-                "max_abs_packet_minus_native": max_abs, "entries_above_1e-10": above,
-            })
+            measurements.append(
+                {
+                    "evaluator": evaluator_name,
+                    "workers": workers,
+                    "one_time_codegen_compile_s": compile_s,
+                    "one_time_map_build_s": map_build_s,
+                    "gather_median_s": gather_s,
+                    "local_hessian_eval_median_s": eval_s,
+                    "vectorized_scatter_median_s": scatter_s,
+                    "cached_packet_callback_median_s": gather_s + eval_s + scatter_s,
+                    "native_nlp_hess_l_median_s": native_s,
+                    "speedup_vs_native": native_s / max(gather_s + eval_s + scatter_s, 1e-15),
+                    "max_abs_packet_minus_native": max_abs,
+                    "entries_above_1e-10": above,
+                }
+            )
     result = {
-        "mode": "offline_prototype_no_ipopt_callback_no_solve", "command": command,
-        "nx": int(hess.size1_in(0)), "ng": int(ng), "global_hessian_triangular_nnz": plan.global_nnz,
-        "one_time_raw_registry_build_s": raw_registry_s, "one_time_packet_build_s": packet_build_s,
+        "mode": "offline_prototype_no_ipopt_callback_no_solve",
+        "command": command,
+        "nx": int(hess.size1_in(0)),
+        "ng": int(ng),
+        "global_hessian_triangular_nnz": plan.global_nnz,
+        "one_time_raw_registry_build_s": raw_registry_s,
+        "one_time_packet_build_s": packet_build_s,
         "one_time_scatter_plan_build_s": scatter_plan_build_s,
-        "state_continuity_fragments": len(packet.metadata), "fragment_local_x": len(packet.decision_indices[0]),
-        "fragment_g_rows": packet.value.size1_out(0), "fragment_local_hessian_nnz": packet.hessian_sparsity.nnz(),
-        "compiled_kernel_max_abs_error": max_kernel_error, "measurements": measurements,
+        "state_continuity_fragments": len(packet.metadata),
+        "fragment_local_x": len(packet.decision_indices[0]),
+        "fragment_g_rows": packet.value.size1_out(0),
+        "fragment_local_hessian_nnz": packet.hessian_sparsity.nnz(),
+        "compiled_kernel_max_abs_error": max_kernel_error,
+        "measurements": measurements,
         "compiler_optimization": args.compiler_optimization if args.compile_local_kernel else None,
         "interpretation": "Exact packet reconstruction of nlp_hess_l with sigma=0 and multipliers only on STATE_CONTINUITY. The generated C contains the already-derived local Lagrangian Hessian; no callback is installed and IPOPT is never run.",
     }

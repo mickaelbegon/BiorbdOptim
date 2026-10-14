@@ -4,7 +4,6 @@ from pathlib import Path
 import casadi as ca
 import numpy as np
 
-
 _SCRIPT = Path(__file__).parents[2] / "scripts" / "hybrid_hessian_contract.py"
 _SPEC = importlib.util.spec_from_file_location("hybrid_hessian_contract", _SCRIPT)
 _MODULE = importlib.util.module_from_spec(_SPEC)
@@ -13,7 +12,15 @@ _SPEC.loader.exec_module(_MODULE)
 
 def _hessian(name, offset=0.0):
     x, p, sigma, lam = ca.MX.sym("x", 2), ca.MX.sym("p", 0, 0), ca.MX.sym("sigma"), ca.MX.sym("lam", 3)
-    hessian = ca.diag(ca.vertcat(sigma + lam[0], 2 * lam[1],)) + offset
+    hessian = (
+        ca.diag(
+            ca.vertcat(
+                sigma + lam[0],
+                2 * lam[1],
+            )
+        )
+        + offset
+    )
     return ca.Function(name, [x, p, sigma, lam], [hessian], ["x", "p", "sigma", "lam_g"], ["hess_gamma_x_x"])
 
 

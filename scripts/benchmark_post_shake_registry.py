@@ -190,7 +190,9 @@ def main() -> None:
         if len(group) < 2:
             break
         representative = group[0]
-        equal = [term for term in group[: min(len(group), 32)] if _equivalent_to_representative(term, representative, rng)]
+        equal = [
+            term for term in group[: min(len(group), 32)] if _equivalent_to_representative(term, representative, rng)
+        ]
         if len(equal) > 1:
             validated.append(equal)
     if not validated:

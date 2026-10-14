@@ -1,4 +1,5 @@
 """Separate native IPOPT callbacks, with a retained symbolic oracle."""
+
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,6 @@ import pytest
 from bioptim import Solver
 from bioptim.interfaces.c_compile_cache import cached_nlpsol_callbacks, IPOPT_NATIVE_CALLBACKS
 
-
 OPTIONS = {"ipopt.print_level": 0, "print_time": False, "ipopt.tol": 1e-10}
 pytestmark = pytest.mark.skipif(platform.system() != "Linux" or not shutil.which("gcc"), reason="Linux/GCC cache")
 
@@ -23,8 +23,7 @@ pytestmark = pytest.mark.skipif(platform.system() != "Linux" or not shutil.which
 def problem(parameter=True):
     x = ca.SX.sym("x", 2)
     p = ca.SX.sym("p") if parameter else ca.SX.sym("p", 0)
-    return {"x": x, "p": p, "f": (x[0] - (p if parameter else 2))**2 + (x[1] - 1)**2,
-            "g": x[0] * x[1]}
+    return {"x": x, "p": p, "f": (x[0] - (p if parameter else 2)) ** 2 + (x[1] - 1) ** 2, "g": x[0] * x[1]}
 
 
 def evaluate(solver, parameter=True):
@@ -37,9 +36,15 @@ def equal(a, b):
 
 
 def build(tmp_path, nlp=None, **kwargs):
-    return cached_nlpsol_callbacks("ipopt", problem() if nlp is None else nlp, kwargs.pop("options", OPTIONS),
-                                   compiler_flags=kwargs.pop("compiler_flags", ("-O1",)),
-                                   cache_dir=tmp_path, cache_name="split", **kwargs)
+    return cached_nlpsol_callbacks(
+        "ipopt",
+        problem() if nlp is None else nlp,
+        kwargs.pop("options", OPTIONS),
+        compiler_flags=kwargs.pop("compiler_flags", ("-O1",)),
+        cache_dir=tmp_path,
+        cache_name="split",
+        **kwargs,
+    )
 
 
 @pytest.mark.parametrize("parameter", [True, False])
@@ -52,6 +57,7 @@ def test_separate_native_solve_and_signatures(tmp_path, parameter, transform):
         if not hasattr(ca.Function, "transform"):
             pytest.skip("CasADi 3.8 transforms")
         from bioptim.interfaces.function_transform import transformed_nlpsol
+
         prepared, _ = transformed_nlpsol(nlp, OPTIONS)
     native, info = build(tmp_path, nlp, vm_solver=prepared)
     equal(evaluate(vm, parameter), evaluate(native, parameter))
@@ -95,12 +101,11 @@ print(json.dumps({'info':info, 'result':{k:v.full().tolist() for k,v in result.i
 """
     env = {**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2]) + os.pathsep + env.get("PYTHONPATH", "")
-    process = subprocess.run([sys.executable, "-c", script, str(tmp_path)], capture_output=True,
-                             text=True, check=True, env=env)
+    process = subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path)], capture_output=True, text=True, check=True, env=env
+    )
     warm = json.loads(process.stdout.splitlines()[-1])
-    assert warm["info"]["hit"] and warm["info"]["callbacks"] == {
-        "nlp_g": {**cold["callbacks"]["nlp_g"], "hit": True}
-    }
+    assert warm["info"]["hit"] and warm["info"]["callbacks"] == {"nlp_g": {**cold["callbacks"]["nlp_g"], "hit": True}}
     equal(expected, warm["result"])
     _, changed = build(tmp_path, callbacks=("nlp_g",), compiler_flags=("-O0",))
     assert not changed["hit"]
@@ -131,12 +136,15 @@ def test_limited_memory_and_custom_derivatives(tmp_path):
 
 def test_failure_and_options(tmp_path, monkeypatch):
     import bioptim.interfaces.c_compile_cache as cache
+
     options = Solver.IPOPT()
     options.set_c_compile_callbacks(True, cache_dir=tmp_path, callbacks=["nlp_g"])
     assert options.c_compile and options.c_compile_callbacks and options.compiler_flags == ("-O1",)
     assert options.native_callbacks == ("nlp_g",)
-    assert not any("compile" in k or "native_callbacks" in k or "cache" in k
-                   for k in options.as_dict(SimpleNamespace(options_common={})))
+    assert not any(
+        "compile" in k or "native_callbacks" in k or "cache" in k
+        for k in options.as_dict(SimpleNamespace(options_common={}))
+    )
     options.set_c_compile(True)
     assert not options.c_compile_callbacks and options.native_callbacks is None
     with pytest.raises(ValueError, match="cache_dir"):
@@ -146,10 +154,12 @@ def test_failure_and_options(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="solver-level jit"):
         build(tmp_path, options={**OPTIONS, "jit": True})
     original = cache.subprocess.run
+
     def fail_compile(command, *args, **kwargs):
         if "-shared" in command:
             return subprocess.CompletedProcess(command, 1, "", "split compile failure")
         return original(command, *args, **kwargs)
+
     monkeypatch.setattr(cache.subprocess, "run", fail_compile)
     with pytest.raises(RuntimeError, match="split compile failure"):
         build(tmp_path)
@@ -159,10 +169,13 @@ def test_failure_and_options(tmp_path, monkeypatch):
 def test_generic_solve_switches_callback_configuration(tmp_path, monkeypatch):
     from bioptim.interfaces import interface_utils
     from bioptim.interfaces.solver_interface import SolverInterface
+
     nlp = problem(False)
-    ocp = SimpleNamespace(variables_vector=nlp["x"],
-                          bounds_vectors=(np.full((2, 1), -np.inf), np.full((2, 1), np.inf)),
-                          init_vector=np.array([[1.0], [1.0]]))
+    ocp = SimpleNamespace(
+        variables_vector=nlp["x"],
+        bounds_vectors=(np.full((2, 1), -np.inf), np.full((2, 1), np.inf)),
+        init_vector=np.array([[1.0], [1.0]]),
+    )
     interface = SolverInterface(ocp)
     interface.opts = Solver.IPOPT()
     interface.opts.set_print_level(0)

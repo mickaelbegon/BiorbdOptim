@@ -44,7 +44,13 @@ def check_abi(reference: ca.Function, candidate: ca.Function) -> dict:
                 }
             )
     passed = compatible and all(item["name_equal"] and item["sparsity_equal"] for item in inputs + outputs)
-    return {"passed": passed, "input_count": reference.n_in(), "output_count": reference.n_out(), "inputs": inputs, "outputs": outputs}
+    return {
+        "passed": passed,
+        "input_count": reference.n_in(),
+        "output_count": reference.n_out(),
+        "inputs": inputs,
+        "outputs": outputs,
+    }
 
 
 def _random_dm(sparsity: ca.Sparsity, rng: np.random.Generator) -> ca.DM:
