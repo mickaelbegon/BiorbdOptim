@@ -487,7 +487,10 @@ class PenaltyOption(OptionGeneric):
         is_integrator = self.integration_rule == QuadratureRule.INTEGRATOR
         is_collocation = self.integration_rule == QuadratureRule.COLLOCATION
         target_shape = tuple(
-            [len(self.rows), len(self.cols) + 1 if (is_trapezoidal or is_integrator or is_collocation) else len(self.cols)]
+            [
+                len(self.rows),
+                len(self.cols) + 1 if (is_trapezoidal or is_integrator or is_collocation) else len(self.cols),
+            ]
         )
         target_cx = controller.cx.sym("target", target_shape)
         if isinstance(self.weight, (ObjectiveWeight, ConstraintWeight)):
@@ -526,9 +529,7 @@ class PenaltyOption(OptionGeneric):
                     numerical_timeseries_cx_start,
                 )
             except NotImplementedError as error:
-                raise NotImplementedError(
-                    f"QuadratureRule.INTEGRATOR is not implemented for {ode_solver}."
-                ) from error
+                raise NotImplementedError(f"QuadratureRule.INTEGRATOR is not implemented for {ode_solver}.") from error
 
             func_at_stage = Function(
                 name,
@@ -626,9 +627,7 @@ class PenaltyOption(OptionGeneric):
                 zip(collocation_abscissas, state_cx_stages, control_cx_stages)
             ):
                 algebraic_state_cx_stage = (
-                    algebraic_state_cx_stages[stage_index]
-                    if algebraic_state_cx_stages
-                    else algebraic_state_cx_start
+                    algebraic_state_cx_stages[stage_index] if algebraic_state_cx_stages else algebraic_state_cx_start
                 )
                 target_at_stage = target_cx[:, 0] + collocation_abscissa * (target_cx[:, 1] - target_cx[:, 0])
                 function_at_stage = func_at_stage(
@@ -640,9 +639,9 @@ class PenaltyOption(OptionGeneric):
                     algebraic_state_cx_stage,
                     numerical_timeseries_cx_start,
                 )
-                modified_fcn += float(collocation_weights[stage_index]) * (
-                    function_at_stage - target_at_stage
-                ) ** exponent
+                modified_fcn += (
+                    float(collocation_weights[stage_index]) * (function_at_stage - target_at_stage) ** exponent
+                )
 
             # This reimplementation is required because input sizes change. The public target format remains one
             # value per shooting node, while the returned value is the weighted sum over collocation stages.

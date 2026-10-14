@@ -89,9 +89,7 @@ def test_dms_quadrature_uses_linear_controls_and_interpolates_targets():
     weighted_function = ocp.nlp[0].J[0].weighted_function[0]
     x = np.zeros((weighted_function.size1_in("x"), 1))
     u = np.array([[1.0], [0.0], [2.0], [0.0]])
-    actual = np.asarray(
-        weighted_function(0.0, 1.0, x, u, [], [], [], np.ones((2, 1)), target[:, :2])
-    ).reshape(-1)
+    actual = np.asarray(weighted_function(0.0, 1.0, x, u, [], [], [], np.ones((2, 1)), target[:, :2])).reshape(-1)
 
     npt.assert_allclose(actual, [1 / 3, 0.0])
 
@@ -100,6 +98,4 @@ def test_dms_quadrature_rejects_rk8_until_its_tableau_fix_is_integrated():
     integrator = _rk_integrator(RK8, lambda _, __, ___: 0)
 
     with pytest.raises(NotImplementedError, match="RK8"):
-        integrator.quadrature_stages(
-            SX.zeros(1, 1), SX.zeros(1, 1), SX.zeros(0, 1), SX.zeros(0, 1), SX.zeros(0, 1)
-        )
+        integrator.quadrature_stages(SX.zeros(1, 1), SX.zeros(1, 1), SX.zeros(0, 1), SX.zeros(0, 1), SX.zeros(0, 1))

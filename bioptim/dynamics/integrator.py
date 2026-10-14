@@ -340,9 +340,7 @@ class RK(Integrator):
     ) -> tuple[MX | SX, list[tuple[float, MX | SX, MX | SX, float]]]:
         """Return the next state and the quadrature stages for a single finite element."""
 
-        raise NotImplementedError(
-            f"Quadrature from integrator stages is not implemented for {self.__class__.__name__}"
-        )
+        raise NotImplementedError(f"Quadrature from integrator stages is not implemented for {self.__class__.__name__}")
 
     def quadrature_stages(
         self,

@@ -340,14 +340,18 @@ def test_collocation_quadrature_interpolates_targets_at_stages(method, objective
     else:
         u = np.array([[1.0], [10.0], [4.0], [40.0]])
         stage_values = np.array(
-            [[1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
-            for collocation_abscissa in collocation_abscissas]
+            [
+                [1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
+                for collocation_abscissa in collocation_abscissas
+            ]
         )
 
     if objective == "qdot":
         stage_values = np.array(
-            [[1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
-            for collocation_abscissa in collocation_abscissas]
+            [
+                [1.0 + 3.0 * collocation_abscissa, 10.0 + 30.0 * collocation_abscissa]
+                for collocation_abscissa in collocation_abscissas
+            ]
         )
 
     target_at_stages = np.array([[4.0 * c_j, 40.0 * c_j] for c_j in collocation_abscissas])
