@@ -591,7 +591,7 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
 
     def advance_window(self, sol: Solution, steps: Int = 0, **advance_options) -> None:
         super(CyclicRecedingHorizonOptimization, self).advance_window(sol, steps, **advance_options)
-        if self.ocp_solver.opts.type == SolverType.IPOPT:
+        if self.ocp_solver.opts.type in (SolverType.IPOPT, SolverType.ALPAQA):
             self.ocp_solver.set_lagrange_multiplier(sol)
 
     def advance_window_bounds_states(self, sol: Solution, **advance_options) -> Bool:
@@ -614,6 +614,11 @@ class CyclicRecedingHorizonOptimization(RecedingHorizonOptimization):
                 self.nlp[0].x_init[key].check_and_adjust_dimensions(len(self.nlp[0].states[key]), self.nlp[0].ns)
 
             self.nlp[0].x_init[key].init[:, :] = states[key]
+            if self.ocp_solver.opts.type == SolverType.ALPAQA:
+                first_node_min = self.nlp[0].x_bounds[key].min[:, 0]
+                first_node_max = self.nlp[0].x_bounds[key].max[:, 0]
+                fixed_at_first_node = first_node_min == first_node_max
+                self.nlp[0].x_init[key].init[fixed_at_first_node, 0] = first_node_min[fixed_at_first_node]
         return True
 
     def advance_window_initial_guess_controls(self, sol: Solution, **advance_options) -> Bool:
@@ -699,21 +704,20 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                     self.nlp[0].x_init[key].check_and_adjust_dimensions(
                         self.nlp[0].states[key].shape, self.nlp[0].ns * self.nb_intermediate_frames
                     )
-                else:
-                    initial_guess_frames = []
-                    for _ in range(self.n_cycles):
-                        initial_guess_frames.extend(
-                            list(
-                                range(
-                                    self.n_cycles_to_advance * self.cycle_len * self.nb_intermediate_frames,
-                                    (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames,
-                                )
+                initial_guess_frames = []
+                for _ in range(self.n_cycles):
+                    initial_guess_frames.extend(
+                        list(
+                            range(
+                                self.n_cycles_to_advance * self.cycle_len * self.nb_intermediate_frames,
+                                (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames,
                             )
                         )
-                    initial_guess_frames.append(
-                        (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames
                     )
-                    self.nlp[0].x_init[key].init[:, :] = states[key][:, initial_guess_frames]
+                initial_guess_frames.append(
+                    (self.n_cycles_to_advance + 1) * self.cycle_len * self.nb_intermediate_frames
+                )
+                self.nlp[0].x_init[key].init[:, :] = states[key][:, initial_guess_frames]
             else:
                 if self.nlp[0].x_init[key].type != InterpolationType.EACH_FRAME:
                     self.nlp[0].x_init.add(
@@ -723,8 +727,7 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
                         phase=0,
                     )
                     self.nlp[0].x_init[key].check_and_adjust_dimensions(self.nlp[0].states[key].shape, self.nlp[0].ns)
-                else:
-                    self.nlp[0].x_init[key].init[:, :] = states[key][:, self.initial_guess_frames]
+                self.nlp[0].x_init[key].init[:, :] = states[key][:, self.initial_guess_frames]
 
     def advance_window_initial_guess_controls(self, sol: Solution, **advance_options) -> None:
         controls = sol.decision_controls(to_merge=SolutionMerge.NODES)
@@ -775,8 +778,8 @@ class MultiCyclicRecedingHorizonOptimization(CyclicRecedingHorizonOptimization):
         )
 
         if self.parameters.shape != 0 and get_all_iterations:
-            final_solution_parameters_dict = [{key: None} for key in solution[0].parameters.keys()][0]
-            for key in solution[0].parameters.keys():
+            final_solution_parameters_dict = [{key: None} for key in solution[1][0].parameters.keys()][0]
+            for key in solution[1][0].parameters.keys():
                 key_val = []
                 for sol in solution[1]:
                     key_val.append(sol.parameters[key])

@@ -15,6 +15,7 @@ from bioptim import (
     InitialGuessList,
     Solver,
     InterpolationType,
+    OrderingStrategy,
 )
 from bioptim.examples.utils import ExampleUtils
 import numpy as np
@@ -28,6 +29,7 @@ def prepare_ocp(
     use_sx=False,
     n_threads=1,
     expand_dynamics=True,
+    ordering_strategy=OrderingStrategy.VARIABLE_MAJOR,
 ):
     # --- Options --- #
     # BioModel path
@@ -85,6 +87,7 @@ def prepare_ocp(
         objective_functions=objective_functions,
         use_sx=use_sx,
         n_threads=n_threads,
+        ordering_strategy=ordering_strategy,
     )
 
 

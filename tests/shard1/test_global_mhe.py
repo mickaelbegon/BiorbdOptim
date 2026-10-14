@@ -2,12 +2,40 @@
 Test for file IO
 """
 
+from types import SimpleNamespace
+
 from bioptim import Solver, PhaseDynamics, SolutionMerge
+from bioptim.misc.enums import SolverType
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 from ..utils import TestUtils
+
+
+@pytest.mark.parametrize("solver_type", [SolverType.IPOPT, SolverType.ALPAQA])
+def test_cyclic_nmpc_primal_warm_start_backend_contract(solver_type):
+    from bioptim.examples.toy_examples.moving_horizon_estimation import cyclic_nmpc as ocp_module
+
+    nmpc = ocp_module.prepare_nmpc(
+        model_path=TestUtils.bioptim_folder() + "/examples/models/arm2.bioMod",
+        cycle_len=20,
+        cycle_duration=1,
+        max_torque=50,
+        expand_dynamics=True,
+        phase_dynamics=PhaseDynamics.SHARED_DURING_THE_PHASE,
+    )
+    nmpc.ocp_solver = SimpleNamespace(opts=SimpleNamespace(type=solver_type))
+    nmpc.nlp[0].x_bounds["q"][0, 0] = -np.pi
+    states = {"q": np.arange(63).reshape(3, 21) / 100, "qdot": np.zeros((3, 21))}
+
+    nmpc.advance_window_initial_guess_states(SimpleNamespace(decision_states=lambda **_: states))
+
+    expected_q = states["q"].copy()
+    if solver_type == SolverType.ALPAQA:
+        expected_q[0, 0] = -np.pi
+    npt.assert_array_equal(nmpc.nlp[0].x_init["q"].init, expected_q)
+    npt.assert_array_equal(nmpc.nlp[0].x_init["qdot"].init, states["qdot"])
 
 
 @pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])

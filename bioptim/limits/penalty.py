@@ -2,7 +2,7 @@ import inspect
 from math import inf
 from typing import Any
 
-from casadi import horzcat, vertcat, Function, MX_eye, SX_eye, SX, jacobian, trace, if_else
+from casadi import horzcat, vertcat, Function, MX, SX, jacobian, trace, if_else
 
 from .penalty_controller import PenaltyController
 from .penalty_option import PenaltyOption
@@ -184,7 +184,7 @@ class PenaltyFunctionAbstract:
             if penalty.target is not None:
                 raise RuntimeError("It is not possible to use a target for the expected feedback effort.")
 
-            CX_eye = SX_eye if controller.ocp.cx == SX else MX_eye
+            CX_eye = SX.eye if controller.ocp.cx == SX else MX.eye
             sensory_noise_matrix = controller.model.sensory_noise_magnitude * CX_eye(
                 controller.model.sensory_noise_magnitude.shape[0]
             )
@@ -307,7 +307,7 @@ class PenaltyFunctionAbstract:
             penalty.plot_target = False
 
             # Compute the position of the marker in the requested reference frame (None for global)
-            CX_eye = SX_eye if controller.ocp.cx == SX else MX_eye
+            CX_eye = SX.eye if controller.ocp.cx == SX else MX.eye
             jcs_t = (
                 CX_eye(4)
                 if reference_jcs is None
