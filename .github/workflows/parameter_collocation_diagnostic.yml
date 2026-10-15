@@ -1,0 +1,67 @@
+name: Parameter collocation Linux diagnostic
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/parameter_collocation_diagnostic.yml
+      - tools/diagnose_parameter_collocation.py
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash -l {0}
+        working-directory: checkout
+    env:
+      PYTHONNOUSERSITE: "1"
+      QT_QPA_PLATFORM: offscreen
+      MPLCONFIGDIR: /tmp/bioptim-parameter-mpl
+      XDG_CACHE_HOME: /tmp/bioptim-parameter-cache
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: checkout
+          persist-credentials: false
+
+      - name: Checkout fixed upstream baseline
+        uses: actions/checkout@v5
+        with:
+          repository: pyomeca/bioptim
+          ref: 2f96c13f770508054631cf510fc4ad84ec09caf9
+          path: baseline
+          persist-credentials: false
+
+      - name: Setup environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: bioptim
+          environment-file: checkout/environment.yml
+          python-version: "3.14.8"
+
+      - name: Pin the failing job runtime
+        run: |
+          conda install --yes --override-channels --channel conda-forge --strict-channel-priority \
+            "python=3.14.8" "biorbd=1.12.3" "casadi=3.7.2" "numpy=2.5.4" \
+            "libopenblas=0.3.34" "libblas=3.11.0=*openblas" \
+            "ipopt=3.14.19" "mumps-seq=5.8.2" pytest scipy packaging
+
+      - name: Compare the original case on both checkouts
+        run: >-
+          python tools/diagnose_parameter_collocation.py
+          --baseline ../baseline --output ../parameter-diagnostics --require-ci-versions
+
+      - name: Archive all diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parameter-collocation-linux-${{ github.run_id }}
+          path: parameter-diagnostics/
+          if-no-files-found: warn
