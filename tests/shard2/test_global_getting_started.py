@@ -89,7 +89,6 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
         pytest.skip("OdeSolver.RK8 is only tested with use_sx=True")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -318,7 +317,6 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -339,7 +337,6 @@ def test_custom_constraint_track_markers(ode_solver, phase_dynamics):
     from bioptim.examples.toy_examples.feature_examples import custom_constraint as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -401,7 +398,6 @@ def test_custom_constraint_track_markers(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -423,7 +419,6 @@ def test_initial_guesses(ode_solver, interpolation, random_init, phase_dynamics)
     from bioptim.examples.toy_examples.feature_examples import custom_initial_guess as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -499,7 +494,6 @@ def test_initial_guesses(ode_solver, interpolation, random_init, phase_dynamics)
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -519,7 +513,6 @@ def test_cyclic_objective(ode_solver, phase_dynamics):
     from bioptim.examples.getting_started import example_cyclic_movement as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -577,7 +570,6 @@ def test_cyclic_objective(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -593,7 +585,6 @@ def test_cyclic_constraint(ode_solver, phase_dynamics):
     from bioptim.examples.getting_started import example_cyclic_movement as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -651,7 +642,6 @@ def test_cyclic_constraint(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -671,7 +661,6 @@ def test_phase_transitions(ode_solver, phase_dynamics):
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -738,7 +727,6 @@ def test_phase_transitions(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -767,7 +755,6 @@ def test_parameter_optimization(ode_solver, phase_dynamics):
     bioptim_folder = TestUtils.bioptim_folder()
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -874,7 +861,6 @@ def test_parameter_optimization(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -899,7 +885,6 @@ def test_custom_problem_type_and_dynamics(problem_type_custom, ode_solver, phase
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -953,7 +938,6 @@ def test_custom_problem_type_and_dynamics(problem_type_custom, ode_solver, phase
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -981,7 +965,6 @@ def test_example_external_forces(ode_solver, phase_dynamics, n_threads, use_sx, 
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1082,7 +1065,6 @@ def test_example_external_forces(ode_solver, phase_dynamics, n_threads, use_sx, 
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1106,7 +1088,6 @@ def test_example_multiphase(ode_solver_type, phase_dynamics):
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1188,7 +1169,6 @@ def test_example_multiphase(ode_solver_type, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1208,7 +1188,6 @@ def test_example_pinocchio(n_threads, phase_dynamics, ordering_strategy):
         pytest.skip("PhaseDynamics.ONE_PER_NODE is not compatible with multi-threading")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1255,7 +1234,6 @@ def test_example_pinocchio(n_threads, phase_dynamics, ordering_strategy):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1290,7 +1268,6 @@ def test_contact_forces_inequality_greater_than_constraint(
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1379,7 +1356,6 @@ def test_contact_forces_inequality_greater_than_constraint(
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1450,7 +1426,6 @@ def test_multinode_objective(ode_solver, phase_dynamics):
     from bioptim.examples.toy_examples.feature_examples import example_multinode_objective as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1558,7 +1533,6 @@ def test_multinode_objective(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1639,7 +1613,6 @@ def test_multinode_constraints(ode_solver, phase_dynamics):
         pytest.skip("OdeSolver.RK8 is only tested with use_sx=True")
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1692,7 +1665,6 @@ def test_multinode_constraints(ode_solver, phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1710,7 +1682,6 @@ def test_multistart():
     from bioptim.examples.getting_started import example_multistart as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1904,7 +1875,6 @@ def test_multistart():
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
@@ -1919,7 +1889,6 @@ def test_example_variable_scaling(phase_dynamics):
     from bioptim.examples.toy_examples.feature_examples import example_variable_scaling as ocp_module
 
     gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
@@ -1966,7 +1935,6 @@ def test_example_variable_scaling(phase_dynamics):
     building_duration = tak - tik
     solving_duration = tok - tak
 
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     mem_after = tracemalloc.take_snapshot()
     top_stats = mem_after.compare_to(mem_before, "lineno")
     mem_used = sum(stat.size_diff for stat in top_stats)
