@@ -1,0 +1,54 @@
+name: Benchmark test instrumentation
+
+on:
+  push:
+    branches: [codex/ci-test-speed-measured]
+    paths:
+      - '.github/workflows/benchmark_test_instrumentation.yml'
+      - '.github/ci/benchmark_test_instrumentation.py'
+      - '.github/ci/tracing_probe.py'
+      - 'tests/shard2/test_global_getting_started.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup environment
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: bioptim
+          environment-file: environment.yml
+      - name: Install CI dependencies
+        run: conda install --yes "numpy>=2.4,<3" pip pytest-cov black pytest codecov packaging pytest-mpl -c conda-forge
+      - name: Run paired benchmark
+        run: >-
+          python .github/ci/benchmark_test_instrumentation.py
+          --base 2f96c13f770508054631cf510fc4ad84ec09caf9
+          --output benchmark-results
+          ${{ runner.os == 'Linux' && '--coverage' || '' }}
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-instrumentation-${{ runner.os }}
+          path: benchmark-results
+          if-no-files-found: error

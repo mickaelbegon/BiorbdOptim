@@ -36,6 +36,15 @@ global test_memory
 test_memory = {}
 
 
+@pytest.fixture(autouse=True)
+def stop_memory_tracking():
+    """Do not leave tracing enabled after a skipped, failed or early-returning test."""
+    try:
+        yield
+    finally:
+        tracemalloc.stop()
+
+
 @pytest.mark.parametrize("phase_dynamics", [PhaseDynamics.SHARED_DURING_THE_PHASE, PhaseDynamics.ONE_PER_NODE])
 @pytest.mark.parametrize("n_threads", [1, 2])
 @pytest.mark.parametrize("use_sx", [False, True])
@@ -71,13 +80,6 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
     if solver == Solver.FATROP and ordering_strategy == OrderingStrategy.VARIABLE_MAJOR:
         pytest.skip("FATROP is not compatible with VARIABLE_MAJOR ordering strategy")
 
-    gc.collect()  # Force garbage collection
-    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
-    tracemalloc.start()  # Start memory tracking
-    mem_before = tracemalloc.take_snapshot()
-
-    tik = time.time()  # Time before starting to build the problem
-
     # For reducing time phase_dynamics=PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
     if n_threads > 1 and phase_dynamics == PhaseDynamics.ONE_PER_NODE:
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and COLLOCATION to reduce time")
@@ -85,6 +87,13 @@ def test_pendulum(ode_solver, use_sx, n_threads, phase_dynamics, defects_type, s
         pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and COLLOCATION to reduce time")
     if ode_solver == OdeSolver.RK8 and not use_sx:
         pytest.skip("OdeSolver.RK8 is only tested with use_sx=True")
+
+    gc.collect()  # Force garbage collection
+    time.sleep(0.1)  # Avoiding delay in memory (re)allocation
+    tracemalloc.start()  # Start memory tracking
+    mem_before = tracemalloc.take_snapshot()
+
+    tik = time.time()  # Time before starting to build the problem
 
     bioptim_folder = TestUtils.bioptim_folder()
 
@@ -657,16 +666,16 @@ def test_cyclic_constraint(ode_solver, phase_dynamics):
 def test_phase_transitions(ode_solver, phase_dynamics):
     from bioptim.examples.getting_started import custom_phase_transitions as ocp_module
 
+    # For reducing time phase_dynamics=PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
+    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
+        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
     tik = time.time()  # Time before starting to build the problem
-
-    # For reducing time phase_dynamics=PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
-    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
-        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     bioptim_folder = TestUtils.bioptim_folder()
 
@@ -885,16 +894,16 @@ def test_parameter_optimization(ode_solver, phase_dynamics):
 def test_custom_problem_type_and_dynamics(problem_type_custom, ode_solver, phase_dynamics):
     from tests import test_utils_ocp as ocp_module
 
+    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
+    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
+        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
     tik = time.time()  # Time before starting to build the problem
-
-    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
-    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
-        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     bioptim_folder = TestUtils.bioptim_folder()
 
@@ -966,17 +975,17 @@ def test_custom_problem_type_and_dynamics(problem_type_custom, ode_solver, phase
 def test_example_external_forces(ode_solver, phase_dynamics, n_threads, use_sx, use_point_of_applications):
     from bioptim.examples.getting_started import example_external_forces as ocp_module
 
+    if use_sx and ode_solver == OdeSolver.IRK:
+        pytest.skip("OdeSolver.IRK is only tested with use_sx=True")
+    if n_threads == 2 and phase_dynamics == PhaseDynamics.ONE_PER_NODE:
+        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
     tik = time.time()  # Time before starting to build the problem
-
-    if use_sx and ode_solver == OdeSolver.IRK:
-        pytest.skip("OdeSolver.IRK is only tested with use_sx=True")
-    if n_threads == 2 and phase_dynamics == PhaseDynamics.ONE_PER_NODE:
-        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     bioptim_folder = TestUtils.bioptim_folder()
 
@@ -1092,16 +1101,16 @@ def test_example_external_forces(ode_solver, phase_dynamics, n_threads, use_sx, 
 def test_example_multiphase(ode_solver_type, phase_dynamics):
     from bioptim.examples.getting_started import example_multiphase as ocp_module
 
+    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
+    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver_type in [OdeSolver.RK8, OdeSolver.COLLOCATION]:
+        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
     tik = time.time()  # Time before starting to build the problem
-
-    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
-    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver_type in [OdeSolver.RK8, OdeSolver.COLLOCATION]:
-        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
 
     bioptim_folder = TestUtils.bioptim_folder()
 
@@ -1276,6 +1285,10 @@ def test_contact_forces_inequality_greater_than_constraint(
 
     from bioptim.examples.getting_started import example_inequality_constraint as ocp_module
 
+    if not expand_dynamics and ode_solver != OdeSolver.IRK:
+        # There is no point testing that
+        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
@@ -1287,9 +1300,6 @@ def test_contact_forces_inequality_greater_than_constraint(
 
     min_bound = 50
 
-    if not expand_dynamics and ode_solver != OdeSolver.IRK:
-        # There is no point testing that
-        pytest.skip("PhaseDynamics.ONE_PER_NODE is only tested with RK4 and IRK to reduce time")
     if expand_dynamics == PhaseDynamics.SHARED_DURING_THE_PHASE and ode_solver == OdeSolver.IRK:
         with pytest.raises(RuntimeError):
             ocp_module.prepare_ocp(
@@ -1624,16 +1634,16 @@ def test_multinode_constraints_too_much_constraints(ode_solver, too_much_constra
 def test_multinode_constraints(ode_solver, phase_dynamics):
     from bioptim.examples.toy_examples.feature_examples import example_multinode_constraints as ocp_module
 
+    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
+    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
+        pytest.skip("OdeSolver.RK8 is only tested with use_sx=True")
+
     gc.collect()  # Force garbage collection
     time.sleep(0.1)  # Avoiding delay in memory (re)allocation
     tracemalloc.start()  # Start memory tracking
     mem_before = tracemalloc.take_snapshot()
 
     tik = time.time()  # Time before starting to build the problem
-
-    # For reducing time phase_dynamics == PhaseDynamics.ONE_PER_NODE is skipped for redundant tests
-    if phase_dynamics == PhaseDynamics.ONE_PER_NODE and ode_solver == OdeSolver.RK8:
-        pytest.skip("OdeSolver.RK8 is only tested with use_sx=True")
 
     bioptim_folder = TestUtils.bioptim_folder()
 
