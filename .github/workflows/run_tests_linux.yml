@@ -104,7 +104,15 @@ jobs:
           coverage xml
           coverage report -m
 
+      - name: Archive merged coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml-${{ github.run_attempt }}
+          path: coverage.xml
+          if-no-files-found: error
+
       - uses: codecov/codecov-action@v5
+        if: github.repository == 'pyomeca/bioptim'
         with:
           files: ./coverage.xml
           flags: unittests
