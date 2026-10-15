@@ -155,8 +155,13 @@ def test_generic_solve_compilation_configuration_rebuilds_solver(tmp_path, monke
     interface.opts.set_c_compile(False)
     interface_utils.generic_solve(interface, False)
     assert not interface.c_compile and interface.c_compile_cache_info is None
-    # The historical nonpersistent route also accepts optimizer flags.
+    # The historical nonpersistent route omits empty flags from Importer options.
     monkeypatch.chdir(tmp_path)
+    interface.opts.set_c_compile(True)
+    native = interface_utils.generic_solve(interface, False)["sol"]["x"]
+    np.testing.assert_allclose(native, reference, atol=1e-11)
+    assert interface.c_compile and interface.c_compile_cache_info is None
+    # Nonempty optimizer flags are still passed to the importer.
     interface.opts.set_c_compile(True, compiler_flags=["-O1"])
     native = interface_utils.generic_solve(interface, False)["sol"]["x"]
     np.testing.assert_allclose(native, reference, atol=1e-11)

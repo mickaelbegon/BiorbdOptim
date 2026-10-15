@@ -216,10 +216,12 @@ def generic_solve(interface: SolverInterface, expand_during_shake_tree: Bool = F
                 if prepared_solver is None:
                     prepared_solver = nlpsol("nlpsol", plugin_name, interface.nlp, options)
                 prepared_solver.generate_dependencies("nlp.c")
+                importer_options = {"flags": list(compile_configuration[1])} if compile_configuration[1] else {}
+                importer = Importer("nlp.c", "shell", importer_options)
                 interface.shaked_ocp_solver = nlpsol(
                     "nlpsol",
                     plugin_name,
-                    Importer("nlp.c", "shell", {"flags": list(compile_configuration[1])}),
+                    importer,
                     options,
                 )
                 interface.c_compile_cache_info = None
