@@ -23,11 +23,11 @@ from ..misc.parameters_types import (
 
 
 def _configure_acados_codegen(acados_ocp: AcadosOcp, solver_options: Solver.ACADOS) -> None:
-    """Configure code generation with the Acados v0.5.5 API."""
+    """Configure code generation with the Acados v0.6.0 API."""
 
-    if not hasattr(acados_ocp, "code_gen_options"):
+    if not hasattr(acados_ocp, "code_gen_options") or not hasattr(acados_ocp, "name"):
         raise RuntimeError(
-            "This version of bioptim requires Acados v0.5.5 or newer. "
+            "This version of bioptim requires Acados v0.6.0 or newer. "
             "Please reinstall Acados using the scripts from bioptim/external."
         )
 
@@ -223,7 +223,7 @@ class AcadosInterface(SolverInterface):
         if not self.opts.acados_model_name:
             if self.opts.c_compile:
                 now = datetime.now()  # current date and time
-                self.acados_model.name = f"model_{now.strftime('%Y_%m_%d_%H%M%S%f')[:-4]}"
+                self.acados_model.name = f"model_{now.strftime('%Y_%m_%d_%H%M%S%f')}"
             else:
                 raise RuntimeError(
                     "If not compiling the library you must provide the name of the model" " you want to use."
@@ -243,6 +243,8 @@ class AcadosInterface(SolverInterface):
 
         # set model
         self.acados_ocp.model = self.acados_model
+        # Acados 0.6 names generated files after the OCP, independently of model.name.
+        self.acados_ocp.name = self.acados_model.name
 
         # set time
         tf_init = ocp.dt_parameter_initial_guess.init[0, 0]
@@ -938,7 +940,6 @@ class AcadosInterface(SolverInterface):
                 setattr(self.acados_ocp.solver_options, key, options[key])
             self.ocp_solver = AcadosOcpSolver(
                 self.acados_ocp,
-                json_file=self.acados_ocp.code_gen_options.json_file,
                 build=self.opts.c_compile,
                 check_reuse_possible=False,
             )

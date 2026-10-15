@@ -80,7 +80,7 @@ cmake .. \
   # -DACADOS_WITH_QPDUNES=ON \
 make install -j$ARG1
 
-# Acados v0.5.5 requires this generated metadata at code-generation time,
+# Acados v0.6.0 requires this generated metadata at code-generation time,
 # but its CMake install target does not copy it to the installation prefix.
 install -m 644 ../lib/link_libs.json ../lib/git_commit_hash "$ARG2/lib/"
 
@@ -98,15 +98,10 @@ REPLACE_ACADOS_SOURCE_BY="    ACADOS_PATH = os.environ['CONDA_PREFIX']"
 TO_REPLACE_ACADOS_PYTHON="ACADOS_PYTHON_INTERFACE_PATH = os.environ.get('ACADOS_PYTHON_INTERFACE_PATH')"
 REPLACE_ACADOS_PYTHON_BY="import site\n    acados_path = site.getsitepackages()\n    ACADOS_PYTHON_INTERFACE_PATH = os.path.join(acados_path[0], 'acados_template')"
 
-# Force yes to t_renderer installation prompt
-TO_REPLACE_T_RENDERER="if input(msg) != 'y':"
-REPLACE_T_RENDERER_BY="if False:"
-
 # Perform the modifications
 sed -i "" "s/$TO_REPLACE_CASADI_DEP/$REPLACE_CASADI_DEP_BY/" setup.py
 sed -i "" "s/$TO_REPLACE_ACADOS_PYTHON/$REPLACE_ACADOS_PYTHON_BY/" acados_template/utils.py
 sed -i "" "s/$TO_REPLACE_ACADOS_SOURCE/$REPLACE_ACADOS_SOURCE_BY/" acados_template/utils.py
-sed -i "" "s/$TO_REPLACE_T_RENDERER/$REPLACE_T_RENDERER_BY/" acados_template/utils.py
 
 # Resolve the @rpath dependencies of the installed Acados libraries.
 install_name_tool -add_rpath "$ARG2/lib" "$ARG2/lib/libacados.dylib"
