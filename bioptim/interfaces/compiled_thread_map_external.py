@@ -10,6 +10,7 @@ therefore still builds the global MX Jacobian and Lagrangian Hessian itself.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -18,11 +19,11 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 
 import casadi as ca
 from casadi import CodeGenerator, Function, MX, external, vertcat
-
 
 _COMPILER_FLAGS = ("-fPIC", "-shared", "-O3")
 _CACHE_SCHEMA = 1
@@ -65,15 +66,38 @@ def _safe_stem(metadata: dict[str, object]) -> str:
 
 @contextmanager
 def _artifact_lock(path: Path):
-    """Serialize cache fills across independent FHO processes on POSIX hosts."""
+    """Serialize cache fills across independent FHO processes."""
 
-    # ``flock`` is deliberately held across code generation too: two workers
+    # The lock is deliberately held across code generation too: two workers
     # generating the same CasADi helper names in one cache directory would
     # otherwise race before the atomic .so rename.
-    import fcntl
-
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as handle:
+    with path.open("a+b") as handle:
+        if os.name == "nt":
+            import msvcrt
+
+            # Lock the same byte even for an existing file. Windows permits
+            # locking beyond EOF, so an empty lock file needs no initialization.
+            handle.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError as error:
+                    if error.errno != errno.EACCES:
+                        raise
+                    # LK_LOCK itself gives up after ten seconds, while a cache
+                    # fill can take longer. Only contention should be retried.
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+
+        import fcntl
+
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -174,9 +198,7 @@ def compile_external_with_exact_derivatives(function: Function, cache_dir: str |
         return loaded
 
 
-def compile_external_output_packets(
-    function: Function, cache_dir: str | Path, max_output_rows: int | None
-) -> Function:
+def compile_external_output_packets(function: Function, cache_dir: str | Path, max_output_rows: int | None) -> Function:
     """Compile a mapped scalar function as bounded exact-output packets.
 
     A large ``ThreadMap`` stage is still much smaller than the complete FHO,
