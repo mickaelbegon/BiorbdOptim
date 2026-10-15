@@ -32,6 +32,87 @@ from bioptim import (
 from tests.utils import TestUtils
 
 
+def test_acados_v060_codegen_configuration(tmp_path, monkeypatch):
+    pytest.importorskip("acados_template")
+    from acados_template import AcadosOcp
+
+    from bioptim.interfaces.acados_interface import _configure_acados_codegen
+
+    monkeypatch.setenv("ACADOS_SOURCE_DIR", str(tmp_path / "source"))
+    acados_root = tmp_path / "installed_acados"
+    generated_code = tmp_path / "generated_code"
+
+    solver = Solver.ACADOS()
+    solver.set_acados_dir(str(acados_root))
+    solver.set_c_generated_code_path(str(generated_code))
+
+    acados_ocp = AcadosOcp()
+    _configure_acados_codegen(acados_ocp, solver)
+
+    assert acados_ocp.code_gen_options.acados_include_path == str(acados_root / "include")
+    assert acados_ocp.code_gen_options.acados_lib_path == str(acados_root / "lib")
+    assert acados_ocp.code_gen_options.code_export_directory == str(generated_code)
+    assert acados_ocp.code_gen_options.json_file == "acados_ocp.json"
+
+
+@pytest.mark.skipif(platform == "win32", reason="The Acados native backend is not installed on Windows")
+def test_acados_v060_generated_solver_reload(tmp_path, monkeypatch):
+    from acados_template import AcadosOcpSolver
+    from bioptim.examples.toy_examples.acados import cube as ocp_module
+
+    monkeypatch.chdir(tmp_path)
+    generated_code = tmp_path / "nested" / "generated_code"
+
+    def prepare_solver(name, target, compile_code=True):
+        ocp = ocp_module.prepare_ocp(
+            biorbd_model_path=TestUtils.bioptim_folder() + "/examples/models/cube_acados.bioMod",
+            n_shooting=10,
+            tf=2,
+        )
+        objectives = ObjectiveList()
+        objectives.add(ObjectiveFcn.Mayer.MINIMIZE_STATE, key="q", index=[0], target=np.array([[target]]))
+        ocp.update_objectives(objectives)
+        solver = Solver.ACADOS()
+        solver.set_acados_model_name(name)
+        solver.set_c_generated_code_path(str(generated_code))
+        solver.set_c_compile(compile_code)
+        return ocp, solver
+
+    first_ocp, first_solver = prepare_solver("bioptim_first", 1.0)
+    first_solution = first_ocp.solve(first_solver)
+    first_states = first_solution.decision_states(to_merge=SolutionMerge.NODES)["q"]
+    assert first_solution.status == 0
+    npt.assert_allclose(first_states[0, -1], 1.0, atol=1e-6)
+    assert (generated_code / "acados_ocp.json").is_file()
+    assert (generated_code / "acados_solver_bioptim_first.c").is_file()
+    assert not (tmp_path / "acados_ocp.json").exists()
+
+    # A second OCP must keep its generated functions separate from the first solver.
+    other_ocp, other_solver = prepare_solver("bioptim_other", 2.0)
+    other_solution = other_ocp.solve(other_solver)
+    assert other_solution.status == 0
+    npt.assert_allclose(other_solution.decision_states(to_merge=SolutionMerge.NODES)["q"][0, -1], 2.0, atol=1e-6)
+    assert (generated_code / "acados_solver_bioptim_other.c").is_file()
+
+    def unexpected_build(*args, **kwargs):
+        pytest.fail("c_compile=False must load the existing solver without compiling it")
+
+    monkeypatch.setattr(AcadosOcpSolver, "build", unexpected_build)
+    reloaded_ocp, reloaded_solver = prepare_solver("bioptim_first", 1.0, compile_code=False)
+    reloaded_solution = reloaded_ocp.solve(reloaded_solver)
+    assert reloaded_solution.status == 0
+    npt.assert_allclose(
+        reloaded_solution.decision_states(to_merge=SolutionMerge.NODES)["q"], first_states, atol=1e-9, rtol=1e-9
+    )
+
+    # Existing solver instances remain usable after another solver has been generated and loaded.
+    repeated_solution = first_ocp.solve(first_solver)
+    assert repeated_solution.status == 0
+    npt.assert_allclose(
+        repeated_solution.decision_states(to_merge=SolutionMerge.NODES)["q"], first_states, atol=1e-9, rtol=1e-9
+    )
+
+
 @pytest.mark.parametrize("cost_type", ["LINEAR_LS", "NONLINEAR_LS"])
 def test_acados_no_obj(cost_type):
     if platform == "win32":
@@ -52,7 +133,7 @@ def test_acados_no_obj(cost_type):
     sol = ocp.solve(solver=solver)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -85,7 +166,7 @@ def test_acados_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], 1.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -120,7 +201,7 @@ def test_acados_mayer_first_node(cost_type):
     npt.assert_almost_equal(q[0, 0], 0.999999948505021)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -157,7 +238,7 @@ def test_acados_several_mayer(cost_type):
     npt.assert_almost_equal(q[2, -1], 3.0)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -202,7 +283,7 @@ def test_acados_one_lagrange(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -250,7 +331,7 @@ def test_acados_one_lagrange_and_one_mayer(cost_type):
     npt.assert_almost_equal(q[0, :], target[0, :].squeeze(), decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -289,7 +370,7 @@ def test_acados_control_lagrange_and_state_mayer(cost_type):
     npt.assert_almost_equal(q[0, -1], target.squeeze())
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -324,7 +405,7 @@ def test_acados_options(cost_type):
         npt.assert_array_less(iter[i + 1], iter[i])
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -485,7 +566,7 @@ def test_acados_one_parameter():
     npt.assert_almost_equal(gravity[-1], -9.80995, decimal=4)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
@@ -562,7 +643,7 @@ def test_acados_several_parameter():
     npt.assert_almost_equal(mass[0], 20, decimal=6)
 
     # Clean test folder
-    os.remove(f"./acados_ocp.json")
+    os.remove("./c_generated_code/acados_ocp.json")
     shutil.rmtree(f"./c_generated_code/")
 
 
