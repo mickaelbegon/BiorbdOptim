@@ -176,7 +176,7 @@ https://conda.anaconda.org/conda-forge/noarch/munkres-1.1.4-pyhd8ed1ab_1.conda#3
 https://conda.anaconda.org/conda-forge/linux-64/openldap-2.6.13-hbde042b_0.conda#680608784722880fbfe1745067570b00
 https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda#936687ed80f295a1f5dbcf8bd34c252c
 https://conda.anaconda.org/conda-forge/linux-64/pillow-13.0.0-py314h50bfbbb_0.conda#f2487a275c624cc3313788d38e793214
-https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh145f28c_0.conda#573cb3ed111004230ed3de650653cd4d
+https://conda.anaconda.org/conda-forge/noarch/pip-26.2.2-pyh145f28c_0.conda#39d4f1dfe506a870f6be9047f0b31246
 https://conda.anaconda.org/conda-forge/noarch/pluggy-1.7.0-pyh5ded981_0.conda#50c6bcd41b7ceaaeeea8852e3198663e
 https://conda.anaconda.org/conda-forge/noarch/ply-3.11-pyhd8ed1ab_3.conda#fd5062942bfa1b0bd5e0d2a4397b099e
 https://conda.anaconda.org/conda-forge/linux-64/pulseaudio-client-17.0-hb10c1b2_4.conda#c907ab7d6d8656e9a3cd8355443f1a4b
@@ -235,7 +235,7 @@ https://conda.anaconda.org/conda-forge/linux-64/epoxy-1.5.10-hb03c661_2.conda#05
 https://conda.anaconda.org/conda-forge/linux-64/harfbuzz-14.6.0-ha770c72_2.conda#0709eacc38906e8a237d9ef172af6688
 https://conda.anaconda.org/conda-forge/linux-64/libboost-python-devel-1.88.0-py314he07d6a8_7.conda#f9739a08407b9db0487fe38d37e9a8e6
 https://conda.anaconda.org/conda-forge/linux-64/libpango-devel-1.58.2-h317d9d0_3.conda#8f2e0739636fe033c7324130121ab11c
-https://conda.anaconda.org/conda-forge/linux-64/libsdformat-16.0.1-py314h1d9b72e_1.conda#fff6cd0e0feb4e1b4fbeed0d12168902
+https://conda.anaconda.org/conda-forge/linux-64/libsdformat-16.0.1-py310h2a7d896_1.conda#0e95e96d3dae5b4ad79d00eec9a95afd
 https://conda.anaconda.org/conda-forge/linux-64/matplotlib-base-3.11.2-py314h9124352_1.conda#55d364956c0d3a01f6e39db3f6f6cc9b
 https://conda.anaconda.org/conda-forge/noarch/pytest-cov-7.1.0-pyhcf101f3_0.conda#67d1790eefa81ed305b89d8e314c7923
 https://conda.anaconda.org/conda-forge/noarch/pytest-xdist-3.8.0-pyhd8ed1ab_0.conda#8375cfbda7c57fbceeda18229be10417

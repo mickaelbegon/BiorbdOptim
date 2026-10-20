@@ -111,7 +111,7 @@ https://conda.anaconda.org/conda-forge/win-64/markupsafe-3.0.4-py314h9aa99d3_1.c
 https://conda.anaconda.org/conda-forge/noarch/munkres-1.1.4-pyhd8ed1ab_1.conda#37293a85a0f4f77bbd9cf7aaefc62609
 https://conda.anaconda.org/conda-forge/win-64/openjpeg-2.5.4-h90fa87c_2.conda#d9b2cb1079cf59651722c09aa3a9f840
 https://conda.anaconda.org/conda-forge/noarch/packaging-26.3-pyhc364b38_0.conda#936687ed80f295a1f5dbcf8bd34c252c
-https://conda.anaconda.org/conda-forge/noarch/pip-26.2.1-pyh145f28c_0.conda#573cb3ed111004230ed3de650653cd4d
+https://conda.anaconda.org/conda-forge/noarch/pip-26.2.2-pyh145f28c_0.conda#39d4f1dfe506a870f6be9047f0b31246
 https://conda.anaconda.org/conda-forge/noarch/pluggy-1.7.0-pyh5ded981_0.conda#50c6bcd41b7ceaaeeea8852e3198663e
 https://conda.anaconda.org/conda-forge/noarch/ply-3.11-pyhd8ed1ab_3.conda#fd5062942bfa1b0bd5e0d2a4397b099e
 https://conda.anaconda.org/conda-forge/noarch/pygments-2.21.0-pyhcf101f3_0.conda#2882dee445dfa45b0c5afce3ffb7730a
@@ -130,7 +130,7 @@ https://conda.anaconda.org/conda-forge/win-64/freetype-2.14.3-h57928b3_2.conda#6
 https://conda.anaconda.org/conda-forge/win-64/glib-2.90.1-h6e26cc4_0.conda#7c15230f51e46cafc6319f79183e715e
 https://conda.anaconda.org/conda-forge/noarch/jinja2-3.1.6-pyhcf101f3_1.conda#04558c96691bed63104678757beb4f8d
 https://conda.anaconda.org/conda-forge/win-64/libcoal-3.0.2-hbc3c3b0_1.conda#a40bce09e8b7b86a5ada9866bb224300
-https://conda.anaconda.org/conda-forge/win-64/libsdformat-16.0.1-py311h0b40081_1.conda#c762494220702556a8f627fd992fa884
+https://conda.anaconda.org/conda-forge/win-64/libsdformat-16.0.1-py310hdd852cc_1.conda#84b2872630f7f721e962c731d8f12050
 https://conda.anaconda.org/conda-forge/win-64/pillow-13.0.0-py314h6acc0e1_0.conda#4d831ea03f97b93f92a89599838854ff
 https://conda.anaconda.org/conda-forge/noarch/python-dateutil-2.9.0.post0-pyhe01879c_2.conda#5b8d21249ff20967101ffa321cab24e8
 https://conda.anaconda.org/conda-forge/win-64/sip-6.10.0-py314h13fbf68_1.conda#616ff579825fcd5782ec14e762291fba
