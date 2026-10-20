@@ -130,7 +130,8 @@ def main() -> int:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         print(
-            "Regenerate all lockfiles and update source-files.sha256 as documented in .github/conda-lock/README.md.",
+            "From a clean local checkout of the PR branch, run: "
+            "python .github/conda-lock/update_lockfiles.py --commit-and-push",
             file=sys.stderr,
         )
         return 1

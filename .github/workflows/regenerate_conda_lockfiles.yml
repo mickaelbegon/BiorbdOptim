@@ -97,17 +97,13 @@ jobs:
           {
             echo '## Conda lockfiles regenerated'
             echo ''
-            echo 'Download the conda-lockfiles artifact and apply its patch from the repository root:'
+            echo 'From a clean local checkout of the PR branch, run:'
             echo ''
             echo '```bash'
-            echo "gh run download $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY --name conda-lockfiles --dir lockfile-update"
-            echo 'git apply --check lockfile-update/conda-lockfiles.patch'
-            echo 'git apply lockfile-update/conda-lockfiles.patch'
-            echo 'python .github/conda-lock/check_lockfiles.py'
+            echo 'python .github/conda-lock/update_lockfiles.py --commit-and-push'
             echo '```'
             echo ''
-            echo 'Commit the three lockfiles and source-files.sha256, then push the PR branch.'
-            echo 'The artifact records its source commit; rebase first if the branch has advanced.'
+            echo 'Review the generated changes in the PR. The conda-lockfiles artifact also contains the exact generated files and a patch.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload regenerated lockfiles
@@ -122,5 +118,5 @@ jobs:
       - name: Require regenerated lockfiles to be committed
         if: steps.inspect.outputs.stale == 'true'
         run: |
-          echo '::error::Commit the lockfile patch from the conda-lockfiles artifact before merging this PR.'
+          echo '::error::From a clean local checkout of the PR branch, run: python .github/conda-lock/update_lockfiles.py --commit-and-push'
           exit 1

@@ -39,49 +39,33 @@ Git patch. No extra secret or write token is needed.
 
 A stale-lockfile run deliberately fails **after** publishing the valid update:
 the generated package versions must be reviewed and committed to make the PR
-reproducible. Download the artifact from the run summary and apply its patch
-from the repository root:
+reproducible. From a clean local checkout of the PR branch, run one command:
 
 ```bash
-gh run download RUN_ID --repo OWNER/REPOSITORY --name conda-lockfiles --dir lockfile-update
-git apply --check lockfile-update/conda-lockfiles.patch
-git apply lockfile-update/conda-lockfiles.patch
-python .github/conda-lock/check_lockfiles.py
-git add .github/conda-lock/conda-*.lock .github/conda-lock/source-files.sha256
-git commit -m "ci: refresh Conda lockfiles"
-git push
+python .github/conda-lock/update_lockfiles.py --commit-and-push
 ```
 
-Use the repository that owns the run in `--repo`. The source commit is recorded
-in the artifact; regenerate against the current branch head if it has advanced.
-Once the patch is committed, the next run takes the fast path and performs no
-resolution. Existing test jobs continue to require the committed lockfiles to
-be consistent before installing their environments.
+The command finds an installed Conda or Mamba solver, installs the pinned
+`conda-lock` tool in a user cache if needed, resolves all three platforms,
+validates the results, and commits and pushes only the generated lockfiles and
+source fingerprint. It refuses to overwrite local lockfile edits or push when
+the local branch differs from its tracked remote. The artifact remains available
+for reviewing the exact generated files and applying its patch if desired.
+Once the update is committed, the next CI run takes the fast path and performs
+no resolution. Existing test jobs continue to require the committed lockfiles
+to be consistent before installing their environments.
 
 ## Manual regeneration
 
-Regenerate all lockfiles from the repository root with `conda-lock 4.0.2`:
+To regenerate and inspect the lockfiles without committing or pushing, run:
 
 ```bash
-conda-lock lock \
-  --kind explicit \
-  --micromamba \
-  --virtual-package-spec .github/conda-lock/virtual-packages.yml \
-  --platform linux-64 \
-  --platform osx-arm64 \
-  --platform win-64 \
-  --file environment.yml \
-  --file .github/conda-lock/ci-dependencies.yml \
-  --filename-template '.github/conda-lock/conda-{platform}.lock'
+python .github/conda-lock/update_lockfiles.py
 ```
 
-Then update the source fingerprint and run the consistency check:
-
-```bash
-python .github/conda-lock/check_lockfiles.py --print-source-hash \
-  > .github/conda-lock/source-files.sha256
-python .github/conda-lock/check_lockfiles.py
-```
+The script uses `conda-lock 4.0.2`, the existing virtual-package specification,
+and both dependency input files. It writes the source fingerprint only after
+successfully generating and validating the three explicit lockfiles.
 
 The source fingerprint normalizes CRLF to LF, so Git checkouts on Windows
 produce the same hash as Linux and macOS. The check runs before Conda setup
